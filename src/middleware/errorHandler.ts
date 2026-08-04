@@ -10,8 +10,9 @@ export const errorHandler = (
   next: NextFunction
 ) => {
   logger.log(err.message, 'ERROR');
+  const statusCode = err.statusCode || 500;
 
-  res.status(err.statusCode || 500).json({
-    error: err.message || 'Internal Server Error'
+  res.status(statusCode).json({
+    error: statusCode >= 500 ? 'Internal Server Error' : err.message
   });
 };

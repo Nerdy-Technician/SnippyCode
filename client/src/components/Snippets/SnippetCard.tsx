@@ -23,8 +23,16 @@ export const SnippetCard = (props: Props): JSX.Element => {
   return (
     <Card classes='h-100' bodyClasses='d-flex flex-column'>
       {/* TITLE */}
-      <h5 className='card-title d-flex align-items-center justify-content-between'>
-        {title}
+      <h5 className='card-title snippet-card-title'>
+        <Link
+          to={{
+            pathname: `/snippet/${id}`,
+            state: { from: window.location.pathname }
+          }}
+          onClick={() => setSnippet(id)}
+        >
+          {title}
+        </Link>
         <SnippetPin id={id} isPinned={isPinned} />
       </h5>
 
@@ -34,11 +42,11 @@ export const SnippetCard = (props: Props): JSX.Element => {
       </h6>
 
       {/* DESCRIPTION */}
-      <p>{description ? description : 'No description'}</p>
+      <p className='snippet-description'>{description ? description : 'No description'}</p>
 
       <div className='mt-auto'>
         {/* UPDATE DATE */}
-        <p>Created {dateParser(createdAt).relative}</p>
+        <p className='snippet-meta'>Created {dateParser(createdAt).relative}</p>
         <hr />
 
         {/* ACTIONS */}

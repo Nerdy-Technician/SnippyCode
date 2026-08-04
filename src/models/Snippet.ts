@@ -43,6 +43,31 @@ export const SnippetModel = sequelize.define<SnippetInstance>(
       allowNull: true,
       defaultValue: 0
     },
+    rawTokenHash: {
+      type: STRING,
+      allowNull: true
+    },
+    rawTokenPrefix: {
+      type: STRING,
+      allowNull: true
+    },
+    rawTokenCreatedAt: {
+      type: DATE,
+      allowNull: true
+    },
+    rawSlug: {
+      type: STRING,
+      allowNull: true
+    },
+    collection: {
+      type: STRING,
+      allowNull: false,
+      defaultValue: 'General'
+    },
+    fileName: {
+      type: STRING,
+      allowNull: true
+    },
     createdAt: {
       type: DATE
     },

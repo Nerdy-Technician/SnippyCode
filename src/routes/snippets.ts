@@ -3,27 +3,54 @@ import {
   countTags,
   createSnippet,
   deleteSnippet,
+  generateSnippetRawToken,
   getAllSnippets,
   getRawCode,
   getSnippet,
+  getSnippetVersions,
+  revokeSnippetRawToken,
   searchSnippets,
   updateSnippet
 } from '../controllers/snippets';
-import { requireBody } from '../middleware';
+import {
+  requireAuth,
+  requireBody,
+  requireMinimumRole,
+  validateSnippetBody,
+  validateSnippetId
+} from '../middleware';
 
 export const snippetRouter = Router();
 
 snippetRouter
+  .route('/raw/:rawRef')
+  .get(getRawCode);
+
+snippetRouter.use(requireAuth);
+
+snippetRouter
   .route('/')
-  .post(requireBody('title', 'language', 'code'), createSnippet)
+  .post(
+    requireMinimumRole('editor'),
+    requireBody('title', 'language', 'code'),
+    validateSnippetBody,
+    createSnippet
+  )
   .get(getAllSnippets);
+
+snippetRouter.route('/statistics/count').get(countTags);
+snippetRouter.route('/search').post(searchSnippets);
 
 snippetRouter
   .route('/:id')
-  .get(getSnippet)
-  .put(updateSnippet)
-  .delete(deleteSnippet);
+  .get(validateSnippetId, getSnippet)
+  .put(validateSnippetId, requireMinimumRole('editor'), validateSnippetBody, updateSnippet)
+  .delete(validateSnippetId, requireMinimumRole('editor'), deleteSnippet);
 
-snippetRouter.route('/statistics/count').get(countTags);
-snippetRouter.route('/raw/:id').get(getRawCode);
-snippetRouter.route('/search').post(searchSnippets);
+snippetRouter
+  .route('/:id/raw-token')
+  .post(validateSnippetId, requireMinimumRole('editor'), generateSnippetRawToken)
+  .delete(validateSnippetId, requireMinimumRole('editor'), revokeSnippetRawToken);
+snippetRouter
+  .route('/:id/versions')
+  .get(validateSnippetId, getSnippetVersions);

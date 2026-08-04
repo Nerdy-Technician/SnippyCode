@@ -6,4 +6,6 @@ export interface Body {
   docs?: string;
   isPinned: boolean;
   tags: string[];
+  collection?: string;
+  fileName?: string;
 }

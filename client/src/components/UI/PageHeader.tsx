@@ -11,20 +11,22 @@ export const PageHeader = <T,>(props: Props<T>): JSX.Element => {
 
   return (
     <div className='col-12'>
-      <h4>{title}</h4>
+      <div className='page-header'>
+        {title && <h1>{title}</h1>}
       {prevDest && (
-        <h6>
+        <div>
           <Link
             to={{
               pathname: prevDest,
               state: prevState
             }}
-            className='text-decoration-none text-light'
+            className='back-link'
           >
-            &lt;- Go back
+            Back
           </Link>
-        </h6>
+        </div>
       )}
+      </div>
     </div>
   );
 };

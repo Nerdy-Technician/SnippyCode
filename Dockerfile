@@ -1,29 +1,39 @@
-FROM node:14-alpine
+FROM node:20-alpine AS server-deps
 
 WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+
+FROM node:20-alpine AS client-deps
+
+WORKDIR /app/client
+COPY client/package*.json ./
+RUN npm ci
+
+FROM node:20-alpine AS build
+
+WORKDIR /app
+ENV NODE_OPTIONS=--openssl-legacy-provider
+COPY --from=server-deps /app/node_modules ./node_modules
+COPY --from=client-deps /app/client/node_modules ./client/node_modules
+COPY . .
+RUN npm run build:tsc \
+  && npm run build --prefix client \
+  && mkdir -p public data \
+  && cp -R client/build/. public/
+
+FROM node:20-alpine AS runtime
+
+WORKDIR /app
+ENV NODE_ENV=production
 
 COPY package*.json ./
+RUN npm ci --omit=dev && npm cache clean --force
 
-RUN npm install
-
-COPY . .
-
-# Install client dependencies
-RUN mkdir -p ./public ./data \
-    && cd client \
-    && npm install \
-    && npm rebuild node-sass
-
-# Build 
-RUN npm run build \
-    && mv ./client/build/* ./public
-
-# Clean up src files
-RUN rm -rf src/ ./client \
-    && npm prune --production
+COPY --from=build /app/build ./build
+COPY --from=build /app/public ./public
+RUN mkdir -p data
 
 EXPOSE 5000
-
-ENV NODE_ENV=production
 
 CMD ["node", "build/server.js"]

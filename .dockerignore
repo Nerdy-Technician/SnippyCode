@@ -1,2 +1,12 @@
 node_modules/
 build/
+client/node_modules/
+client/build/
+data/
+.git/
+.github/img/
+.env
+.env.local
+.env.*.local
+npm-debug.log*
+Dockerfile.arm

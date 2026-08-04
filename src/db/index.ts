@@ -1,14 +1,20 @@
 import path from 'path';
+import dotenv from 'dotenv';
 import { Sequelize } from 'sequelize';
 import Umzug from 'umzug';
 import { Logger } from '../utils';
 
+dotenv.config();
+
 const logger = new Logger('db');
 
+const databaseUrl =
+  process.env.DATABASE_URL ||
+  'postgres://snippysafe:snippysafe@localhost:5432/snippysafe';
+
 // DB config
-export const sequelize = new Sequelize({
-  dialect: 'sqlite',
-  storage: 'data/db.sqlite3',
+export const sequelize = new Sequelize(databaseUrl, {
+  dialect: 'postgres',
   logging: false
 });
 

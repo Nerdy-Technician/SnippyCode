@@ -39,8 +39,8 @@ export const Snippets = (): JSX.Element => {
         <Fragment>
           <div className='col-12 col-md-4 col-lg-3'>
             <Card>
-              <h5 className='card-title'>All snippets</h5>
-              <div className='mb-3 d-flex justify-content-between'>
+              <h5 className='card-title'>Library</h5>
+              <div className='metric-row'>
                 <span>Total</span>
                 <span>{snippets.length}</span>
               </div>
@@ -54,9 +54,7 @@ export const Snippets = (): JSX.Element => {
                   return (
                     <div
                       key={idx}
-                      className={`d-flex justify-content-between cursor-pointer ${
-                        isActiveFilter && 'text-success'
-                      }`}
+                      className={`tag-filter ${isActiveFilter ? 'is-active' : ''}`}
                       onClick={() => filterHandler(tag.name)}
                     >
                       <span>{tag.name}</span>

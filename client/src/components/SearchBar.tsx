@@ -22,25 +22,17 @@ export const SearchBar = (): JSX.Element => {
   };
 
   return (
-    <div className='mb-3'>
+    <div className='col-12 search-panel'>
       <input
         type='text'
-        className='form-control'
+        className='form-control form-control-lg'
         placeholder='card lang:typescript tags:ui,react'
         ref={inputRef}
         onKeyUp={e => inputHandler(e)}
       />
-      <div className='form-text text-gray ms-1'>
-        Search by pressing `Enter`. Clear with `Esc`. Read more about available
-        filters{' '}
-        <a
-          href='https://github.com/pawelmalak/snippet-box/wiki/Search-filters'
-          target='_blank'
-          rel='noreferrer'
-          className='text-success text-decoration-none'
-        >
-          here
-        </a>
+      <div className='form-text'>
+        Search by pressing `Enter`. Clear with `Esc`. Try filters like
+        `lang:typescript` or `tags:ui,react`.
       </div>
     </div>
   );

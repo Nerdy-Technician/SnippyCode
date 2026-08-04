@@ -10,13 +10,13 @@ interface Props {
 export const Card = (props: Props): JSX.Element => {
   const { title, children, classes = '', bodyClasses = '' } = props;
 
-  const parentClasses = `card mb-3 ${classes}`;
+  const parentClasses = `card app-card ${classes}`;
   const childClasses = `card-body ${bodyClasses}`;
 
   return (
     <div className={parentClasses}>
       <div className={childClasses}>
-        <h5 className='card-title'>{title}</h5>
+        {title && <h5 className='card-title'>{title}</h5>}
         {children}
       </div>
     </div>

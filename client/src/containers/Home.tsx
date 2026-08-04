@@ -1,37 +1,158 @@
-import { useEffect, useContext, Fragment } from 'react';
+import { useEffect, useContext } from 'react';
+import { Link } from 'react-router-dom';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import {
+  faBook,
+  faCode,
+  faDatabase,
+  faGear,
+  faMagnifyingGlass,
+  faStar
+} from '@fortawesome/free-solid-svg-icons';
 import { SnippetsContext } from '../store';
-import { Layout, PageHeader, EmptyState } from '../components/UI';
+import { Layout, Card } from '../components/UI';
 import { SnippetGrid } from '../components/Snippets/SnippetGrid';
 import { SearchBar } from '../components/SearchBar';
 
 export const Home = (): JSX.Element => {
   const { snippets, getSnippets, searchResults } = useContext(SnippetsContext);
+  const pinnedSnippets = snippets.filter(snippet => snippet.isPinned);
+  const recentSnippets = [...snippets]
+    .sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    )
+    .slice(0, 4);
+  const languages = Array.from(
+    new Set(snippets.map(snippet => snippet.language))
+  );
+  const tags = Array.from(
+    new Set(snippets.flatMap(snippet => snippet.tags || []))
+  );
 
   useEffect(() => {
     getSnippets();
   }, []);
 
   return (
-    <Layout>
-      {snippets.length === 0 ? (
-        <EmptyState />
-      ) : (
-        <Fragment>
-          <PageHeader title='Search' />
-          <SearchBar />
-          <div className='col-12 mb-4'>
-            <SnippetGrid snippets={searchResults} />
+    <Layout classes='home-dashboard'>
+      <div className='col-12'>
+        <section className='home-hero'>
+          <div>
+            <p className='eyebrow'>SnippyCode</p>
+            <h1>Your working memory, versioned.</h1>
+            <p>
+              Save commands, patterns, docs, and fixes in one fast searchable
+              workspace.
+            </p>
           </div>
+          <div className='home-actions'>
+            <Link to='/editor' className='btn btn-primary'>
+              <FontAwesomeIcon icon={faCode} />
+              <span>{snippets.length ? 'New snippet' : 'Create first snippet'}</span>
+            </Link>
+            <Link to='/snippets' className='btn btn-outline-secondary'>
+              <FontAwesomeIcon icon={faBook} />
+              <span>Browse library</span>
+            </Link>
+            <Link to='/admin' className='btn btn-outline-secondary'>
+              <FontAwesomeIcon icon={faGear} />
+              <span>Admin</span>
+            </Link>
+          </div>
+        </section>
+      </div>
 
-          {snippets.some(s => s.isPinned) && (
-            <Fragment>
-              <PageHeader title='Pinned snippets' />
-              <div className='col-12 mt-3'>
-                <SnippetGrid snippets={snippets.filter(s => s.isPinned)} />
+      <div className='col-12'>
+        <section className='home-metrics'>
+          <article>
+            <FontAwesomeIcon icon={faDatabase} />
+            <div>
+              <strong>{snippets.length}</strong>
+              <span>Snippets</span>
+            </div>
+          </article>
+          <article>
+            <FontAwesomeIcon icon={faStar} />
+            <div>
+              <strong>{pinnedSnippets.length}</strong>
+              <span>Pinned</span>
+            </div>
+          </article>
+          <article>
+            <FontAwesomeIcon icon={faCode} />
+            <div>
+              <strong>{languages.length}</strong>
+              <span>Languages</span>
+            </div>
+          </article>
+          <article>
+            <FontAwesomeIcon icon={faMagnifyingGlass} />
+            <div>
+              <strong>{tags.length}</strong>
+              <span>Tags</span>
+            </div>
+          </article>
+        </section>
+      </div>
+
+      {snippets.length === 0 ? (
+        <>
+          <div className='col-12 col-lg-7'>
+            <Card classes='home-panel'>
+              <p className='eyebrow'>Start here</p>
+              <h5 className='card-title'>Build the library around real work</h5>
+              <div className='home-checklist'>
+                <span>Add your first shell command or config fragment</span>
+                <span>Tag it by language, tool, or project</span>
+                <span>Pin anything you reach for every week</span>
+                <span>Use Admin to configure GitHub sync and auth</span>
               </div>
-            </Fragment>
+            </Card>
+          </div>
+          <div className='col-12 col-lg-5'>
+            <Card classes='home-panel'>
+              <p className='eyebrow'>Quick capture</p>
+              <h5 className='card-title'>Paste now, polish later</h5>
+              <p className='text-muted'>
+                The editor auto-detects language from your code, so you can keep
+                moving and organize after the idea is safely stored.
+              </p>
+              <Link to='/editor' className='btn btn-primary'>
+                Open editor
+              </Link>
+            </Card>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className='col-12'>
+            <Card classes='home-panel home-search-panel'>
+              <p className='eyebrow'>Search</p>
+              <SearchBar />
+            </Card>
+          </div>
+          {pinnedSnippets.length > 0 && (
+            <div className='col-12'>
+              <div className='home-section-header'>
+                <h2>Pinned snippets</h2>
+                <Link to='/snippets'>View all</Link>
+              </div>
+              <SnippetGrid snippets={pinnedSnippets.slice(0, 4)} />
+            </div>
           )}
-        </Fragment>
+          <div className='col-12'>
+            <div className='home-section-header'>
+              <h2>{searchResults.length ? 'Matching snippets' : 'Recent snippets'}</h2>
+              <Link to='/editor'>Add snippet</Link>
+            </div>
+            <SnippetGrid
+              snippets={
+                searchResults.length > 0 ? searchResults.slice(0, 6) : recentSnippets
+              }
+            />
+          </div>
+        </>
       )}
     </Layout>
   );

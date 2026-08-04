@@ -18,10 +18,10 @@ export const SnippetCode = (props: Props): JSX.Element => {
   }, []);
 
   return (
-    <pre>
+    <pre className='code-panel'>
       <code
         className={`language-${syntax.toLowerCase()}`}
-        style={{ whiteSpace: 'pre-wrap', borderRadius: '4px' }}
+        style={{ whiteSpace: 'pre-wrap' }}
       >
         {code}
       </code>

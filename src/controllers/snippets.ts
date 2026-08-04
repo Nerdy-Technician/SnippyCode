@@ -1,10 +1,74 @@
 import { Request, Response, NextFunction } from 'express';
 import { QueryTypes, Op } from 'sequelize';
 import { sequelize } from '../db';
-import { asyncWrapper } from '../middleware';
-import { SnippetModel, Snippet_TagModel, TagModel } from '../models';
-import { ErrorResponse, tagParser, Logger, createTags } from '../utils';
+import { asyncWrapper, AuthenticatedRequest } from '../middleware';
+import {
+  SnippetModel,
+  Snippet_TagModel,
+  SnippetVersionModel,
+  TagModel
+} from '../models';
+import {
+  ErrorResponse,
+  auditLog,
+  createRawSnippetToken,
+  detectSecretFindings,
+  requestIp,
+  tagParser,
+  createTags,
+  verifyTokenHash
+} from '../utils';
 import { Body, SearchQuery } from '../typescript/interfaces';
+
+const auditActor = (req: AuthenticatedRequest) => ({
+  userId: req.user?.id || null,
+  ipAddress: requestIp(req)
+});
+
+const slugify = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9.]+/g, '-')
+    .replace(/(^-|-$)/g, '')
+    .slice(0, 100);
+
+const extensionForLanguage = (language: string): string => {
+  const extensions: { [key: string]: string } = {
+    bash: 'sh',
+    shell: 'sh',
+    javascript: 'js',
+    typescript: 'ts',
+    python: 'py',
+    markdown: 'md',
+    yaml: 'yml'
+  };
+
+  return extensions[language] || language || 'txt';
+};
+
+const rawSlugForSnippet = (snippet: {
+  id?: number;
+  title: string;
+  language: string;
+  fileName?: string | null;
+}): string => {
+  if (snippet.fileName) {
+    return slugify(snippet.fileName);
+  }
+
+  const extension = extensionForLanguage(snippet.language);
+  const base = slugify(snippet.title) || `snippet-${snippet.id || Date.now()}`;
+
+  return base.includes('.') ? base : `${base}.${extension}`;
+};
+
+const publicSnippet = (rawSnippet: any, tags?: string[]) => ({
+  ...rawSnippet,
+  rawTokenHash: undefined,
+  rawTokenPrefix: rawSnippet.rawTokenPrefix || null,
+  rawTokenConfigured: Boolean(rawSnippet.rawTokenHash),
+  tags
+});
 
 /**
  * @description Create new snippet
@@ -12,7 +76,7 @@ import { Body, SearchQuery } from '../typescript/interfaces';
  * @request POST
  */
 export const createSnippet = asyncWrapper(
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
     // Get tags from request body
     const { language, tags: requestTags } = <Body>req.body;
     const parsedRequestTags = tagParser([
@@ -21,8 +85,10 @@ export const createSnippet = asyncWrapper(
     ]);
 
     // Create snippet
+    const rawSlug = rawSlugForSnippet(req.body);
     const snippet = await SnippetModel.create({
       ...req.body,
+      rawSlug,
       tags: [...parsedRequestTags].join(',')
     });
 
@@ -32,11 +98,21 @@ export const createSnippet = asyncWrapper(
     // Get raw snippet values
     const rawSnippet = snippet.get({ plain: true });
 
+    const secretFindings = detectSecretFindings(
+      req.body.code,
+      req.body.docs,
+      req.body.description
+    );
+
+    await auditLog('snippet.created', {
+      ...auditActor(req),
+      target: `snippet:${snippet.id}`,
+      metadata: { title: rawSnippet.title, secretFindings }
+    });
+
     res.status(201).json({
-      data: {
-        ...rawSnippet,
-        tags: [...parsedRequestTags]
-      }
+      data: publicSnippet(rawSnippet, [...parsedRequestTags]),
+      warnings: secretFindings.map(finding => finding.label)
     });
   }
 );
@@ -62,10 +138,7 @@ export const getAllSnippets = asyncWrapper(
     const populatedSnippets = snippets.map(snippet => {
       const rawSnippet = snippet.get({ plain: true });
 
-      return {
-        ...rawSnippet,
-        tags: rawSnippet.tags?.map(tag => tag.name)
-      };
+      return publicSnippet(rawSnippet, rawSnippet.tags?.map(tag => tag.name));
     });
 
     res.status(200).json({
@@ -104,8 +177,7 @@ export const getSnippet = asyncWrapper(
 
     const rawSnippet = snippet.get({ plain: true });
     const populatedSnippet = {
-      ...rawSnippet,
-      tags: rawSnippet.tags?.map(tag => tag.name)
+      ...publicSnippet(rawSnippet, rawSnippet.tags?.map(tag => tag.name))
     };
 
     res.status(200).json({
@@ -120,7 +192,7 @@ export const getSnippet = asyncWrapper(
  * @request PUT
  */
 export const updateSnippet = asyncWrapper(
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
     let snippet = await SnippetModel.findOne({
       where: { id: req.params.id }
     });
@@ -134,6 +206,19 @@ export const updateSnippet = asyncWrapper(
       );
     }
 
+    const existing = snippet.get({ plain: true });
+
+    await SnippetVersionModel.create({
+      snippetId: snippet.id,
+      title: existing.title,
+      description: existing.description || '',
+      language: existing.language,
+      code: existing.code,
+      docs: existing.docs || '',
+      tags: typeof existing.tags === 'string' ? existing.tags : '',
+      createdBy: req.user?.id || null
+    });
+
     // Get tags from request body
     const { language, tags: requestTags } = <Body>req.body;
     let parsedRequestTags = tagParser([...requestTags, language.toLowerCase()]);
@@ -141,6 +226,7 @@ export const updateSnippet = asyncWrapper(
     // Update snippet
     snippet = await snippet.update({
       ...req.body,
+      rawSlug: rawSlugForSnippet({ ...req.body, id: snippet.id }),
       tags: [...parsedRequestTags].join(',')
     });
 
@@ -151,11 +237,21 @@ export const updateSnippet = asyncWrapper(
     // Get raw snippet values
     const rawSnippet = snippet.get({ plain: true });
 
+    const secretFindings = detectSecretFindings(
+      req.body.code,
+      req.body.docs,
+      req.body.description
+    );
+
+    await auditLog('snippet.updated', {
+      ...auditActor(req),
+      target: `snippet:${snippet.id}`,
+      metadata: { title: rawSnippet.title, secretFindings }
+    });
+
     res.status(200).json({
-      data: {
-        ...rawSnippet,
-        tags: [...parsedRequestTags]
-      }
+      data: publicSnippet(rawSnippet, [...parsedRequestTags]),
+      warnings: secretFindings.map(finding => finding.label)
     });
   }
 );
@@ -166,7 +262,7 @@ export const updateSnippet = asyncWrapper(
  * @request DELETE
  */
 export const deleteSnippet = asyncWrapper(
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
     const snippet = await SnippetModel.findOne({
       where: { id: req.params.id }
     });
@@ -181,7 +277,13 @@ export const deleteSnippet = asyncWrapper(
     }
 
     await Snippet_TagModel.destroy({ where: { snippet_id: req.params.id } });
+    await SnippetVersionModel.destroy({ where: { snippetId: req.params.id } });
     await snippet.destroy();
+
+    await auditLog('snippet.deleted', {
+      ...auditActor(req),
+      target: `snippet:${req.params.id}`
+    });
 
     res.status(200).json({
       data: {}
@@ -222,8 +324,11 @@ export const countTags = asyncWrapper(
  */
 export const getRawCode = asyncWrapper(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const rawRef = String(req.params.rawRef || req.params.id || '');
     const snippet = await SnippetModel.findOne({
-      where: { id: req.params.id },
+      where: Number(rawRef)
+        ? { id: Number(rawRef) }
+        : { rawSlug: rawRef },
       raw: true
     });
 
@@ -231,12 +336,85 @@ export const getRawCode = asyncWrapper(
       return next(
         new ErrorResponse(
           404,
-          `Snippet with id of ${req.params.id} was not found`
+          `Snippet with raw reference ${rawRef} was not found`
         )
       );
     }
 
-    res.status(200).send(snippet.code);
+    const token = String(req.query.key || req.header('x-api-key') || '');
+
+    if (!verifyTokenHash(token, snippet.rawTokenHash)) {
+      return next(new ErrorResponse(401, 'Valid snippet raw token required'));
+    }
+
+    res.type('text/plain').status(200).send(snippet.code);
+  }
+);
+
+export const generateSnippetRawToken = asyncWrapper(
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+    const snippet = await SnippetModel.findByPk(req.params.id);
+
+    if (!snippet) {
+      return next(new ErrorResponse(404, 'Snippet was not found'));
+    }
+
+    const rawToken = createRawSnippetToken();
+    await snippet.update({
+      rawTokenHash: rawToken.hash,
+      rawTokenPrefix: rawToken.prefix,
+      rawTokenCreatedAt: rawToken.createdAt,
+      rawSlug: rawSlugForSnippet(snippet)
+    });
+
+    await auditLog('snippet.raw_token.generated', {
+      ...auditActor(req),
+      target: `snippet:${snippet.id}`
+    });
+
+    res.status(201).json({
+      data: {
+        token: rawToken.token,
+        rawSlug: snippet.rawSlug,
+        rawTokenPrefix: rawToken.prefix,
+        rawTokenConfigured: true
+      }
+    });
+  }
+);
+
+export const revokeSnippetRawToken = asyncWrapper(
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+    const snippet = await SnippetModel.findByPk(req.params.id);
+
+    if (!snippet) {
+      return next(new ErrorResponse(404, 'Snippet was not found'));
+    }
+
+    await snippet.update({
+      rawTokenHash: null,
+      rawTokenPrefix: null,
+      rawTokenCreatedAt: null
+    });
+
+    await auditLog('snippet.raw_token.revoked', {
+      ...auditActor(req),
+      target: `snippet:${snippet.id}`
+    });
+
+    res.status(200).json({ data: { rawTokenConfigured: false } });
+  }
+);
+
+export const getSnippetVersions = asyncWrapper(
+  async (req: Request, res: Response): Promise<void> => {
+    const versions = await SnippetVersionModel.findAll({
+      where: { snippetId: req.params.id },
+      order: [['createdAt', 'DESC']],
+      limit: 25
+    });
+
+    res.status(200).json({ data: versions });
   }
 );
 
