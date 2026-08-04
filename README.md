@@ -139,34 +139,3 @@ Raw URLs use per-snippet tokens:
 ```
 
 Tokens can be generated, copied, regenerated, and revoked from the snippet detail page.
-
-## Releases
-
-The workflow in [.github/workflows/release.yml](./.github/workflows/release.yml) builds a multi-architecture container image and creates a GitHub release when the app version changes or when a SemVer tag is pushed.
-
-Automatic release from a version bump:
-
-```sh
-npm version patch --no-git-tag-version
-git add package.json package-lock.json .github/RELEASE.md
-git commit -m "Release v1.0.1"
-git push origin main
-```
-
-On `main`, the workflow reads `package.json`, creates the matching `vX.Y.Z` tag if it does not already exist, publishes the image, and creates the GitHub release.
-
-Manual tag release:
-
-```sh
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-Published image tags:
-
-- `ghcr.io/nerdy-technician/snippycode:latest`
-- `ghcr.io/nerdy-technician/snippycode:v1.0.0`
-- `ghcr.io/nerdy-technician/snippycode:1.0.0`
-- `ghcr.io/nerdy-technician/snippycode:1.0`
-
-The same workflow can be run manually from GitHub Actions. Release body text lives in [.github/RELEASE.md](./.github/RELEASE.md); update it before tagging a new version.
