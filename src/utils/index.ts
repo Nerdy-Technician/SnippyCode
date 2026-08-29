@@ -7,3 +7,8 @@ export * from './createTags';
 export * from './apiKeys';
 export * from './audit';
 export * from './secrets';
+export * from './runSnippet';
+export * from './aiSettings';
+export * from './aiAssist';
+export * from './aiOAuth';
+export * from './snippetBoxImport';

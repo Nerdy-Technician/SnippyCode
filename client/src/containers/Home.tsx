@@ -9,13 +9,18 @@ import {
   faMagnifyingGlass,
   faStar
 } from '@fortawesome/free-solid-svg-icons';
-import { SnippetsContext } from '../store';
+import { AuthContext, SnippetsContext } from '../store';
 import { Layout, Card } from '../components/UI';
 import { SnippetGrid } from '../components/Snippets/SnippetGrid';
 import { SearchBar } from '../components/SearchBar';
+import { canAdmin, canEditSnippets } from '../utils';
 
 export const Home = (): JSX.Element => {
-  const { snippets, getSnippets, searchResults } = useContext(SnippetsContext);
+  const { snippets, getSnippets, searchResults, searchActive } =
+    useContext(SnippetsContext);
+  const { user } = useContext(AuthContext);
+  const canEdit = canEditSnippets(user?.role);
+  const showAdmin = canAdmin(user?.role);
   const pinnedSnippets = snippets.filter(snippet => snippet.isPinned);
   const recentSnippets = [...snippets]
     .sort(
@@ -47,18 +52,24 @@ export const Home = (): JSX.Element => {
             </p>
           </div>
           <div className='home-actions'>
-            <Link to='/editor' className='btn btn-primary'>
-              <FontAwesomeIcon icon={faCode} />
-              <span>{snippets.length ? 'New snippet' : 'Create first snippet'}</span>
-            </Link>
+            {canEdit && (
+              <Link to='/editor' className='btn btn-primary'>
+                <FontAwesomeIcon icon={faCode} />
+                <span>
+                  {snippets.length ? 'New snippet' : 'Create first snippet'}
+                </span>
+              </Link>
+            )}
             <Link to='/snippets' className='btn btn-outline-secondary'>
               <FontAwesomeIcon icon={faBook} />
               <span>Browse library</span>
             </Link>
-            <Link to='/admin' className='btn btn-outline-secondary'>
-              <FontAwesomeIcon icon={faGear} />
-              <span>Admin</span>
-            </Link>
+            {showAdmin && (
+              <Link to='/admin' className='btn btn-outline-secondary'>
+                <FontAwesomeIcon icon={faGear} />
+                <span>Admin</span>
+              </Link>
+            )}
           </div>
         </section>
       </div>
@@ -106,7 +117,9 @@ export const Home = (): JSX.Element => {
                 <span>Add your first shell command or config fragment</span>
                 <span>Tag it by language, tool, or project</span>
                 <span>Pin anything you reach for every week</span>
-                <span>Use Admin to configure GitHub sync and auth</span>
+                {showAdmin && (
+                  <span>Use Admin to configure GitHub sync and auth</span>
+                )}
               </div>
             </Card>
           </div>
@@ -118,9 +131,11 @@ export const Home = (): JSX.Element => {
                 The editor auto-detects language from your code, so you can keep
                 moving and organize after the idea is safely stored.
               </p>
-              <Link to='/editor' className='btn btn-primary'>
-                Open editor
-              </Link>
+              {canEdit && (
+                <Link to='/editor' className='btn btn-primary'>
+                  Open editor
+                </Link>
+              )}
             </Card>
           </div>
         </>
@@ -143,14 +158,18 @@ export const Home = (): JSX.Element => {
           )}
           <div className='col-12'>
             <div className='home-section-header'>
-              <h2>{searchResults.length ? 'Matching snippets' : 'Recent snippets'}</h2>
-              <Link to='/editor'>Add snippet</Link>
+              <h2>{searchActive ? 'Matching snippets' : 'Recent snippets'}</h2>
+              {canEdit && <Link to='/editor'>Add snippet</Link>}
             </div>
-            <SnippetGrid
-              snippets={
-                searchResults.length > 0 ? searchResults.slice(0, 6) : recentSnippets
-              }
-            />
+            {searchActive && searchResults.length === 0 ? (
+              <p className='text-muted'>No matching snippets.</p>
+            ) : (
+              <SnippetGrid
+                snippets={
+                  searchActive ? searchResults.slice(0, 6) : recentSnippets
+                }
+              />
+            )}
           </div>
         </>
       )}

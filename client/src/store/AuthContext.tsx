@@ -12,7 +12,17 @@ interface AuthContextValue {
   needsSetup: boolean;
   oidcEnabled: boolean;
   localLoginEnabled: boolean;
+  oidcProviderName: string;
   user: AuthUser | null;
+  snippetRun: {
+    enabled: boolean;
+    languages: string[];
+    timeoutMs: number;
+  };
+  snippetAssist: {
+    enabled: boolean;
+    providers: { id: 'openai' | 'anthropic'; label: string }[];
+  };
   refreshAuth: () => void;
   setup: (payload: SetupPayload) => Promise<void>;
   login: (email: string, password: string, mfaCode?: string, mfaToken?: string) => Promise<string | null>;
@@ -27,7 +37,17 @@ export const AuthContext = createContext<AuthContextValue>({
   needsSetup: false,
   oidcEnabled: false,
   localLoginEnabled: true,
+  oidcProviderName: 'Keycloak',
   user: null,
+  snippetRun: {
+    enabled: false,
+    languages: [],
+    timeoutMs: 15000
+  },
+  snippetAssist: {
+    enabled: false,
+    providers: []
+  },
   refreshAuth: () => {},
   setup: async () => {},
   login: async () => null,
@@ -48,13 +68,37 @@ export const AuthContextProvider = (props: Props): JSX.Element => {
   const [needsSetup, setNeedsSetup] = useState(false);
   const [oidcEnabled, setOidcEnabled] = useState(false);
   const [localLoginEnabled, setLocalLoginEnabled] = useState(true);
+  const [oidcProviderName, setOidcProviderName] = useState('Keycloak');
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [snippetRun, setSnippetRun] = useState({
+    enabled: false,
+    languages: [] as string[],
+    timeoutMs: 15000
+  });
+  const [snippetAssist, setSnippetAssist] = useState({
+    enabled: false,
+    providers: [] as { id: 'openai' | 'anthropic'; label: string }[]
+  });
 
   const applyStatus = (status: AuthStatus) => {
     setNeedsSetup(status.needsSetup);
     setOidcEnabled(status.oidcEnabled);
     setLocalLoginEnabled(status.localLoginEnabled);
+    setOidcProviderName(status.oidcProviderName || 'Keycloak');
     setUser(status.user);
+    setSnippetRun(
+      status.snippetRun || {
+        enabled: false,
+        languages: [],
+        timeoutMs: 15000
+      }
+    );
+    setSnippetAssist(
+      status.snippetAssist || {
+        enabled: false,
+        providers: []
+      }
+    );
   };
 
   const refreshAuth = useCallback((): void => {
@@ -69,9 +113,18 @@ export const AuthContextProvider = (props: Props): JSX.Element => {
   }, [refreshAuth]);
 
   const setup = async (payload: SetupPayload): Promise<void> => {
-    const res = await axios.post<Response<AuthUser>>('/api/auth/setup', payload);
+    const res = await axios.post<Response<AuthUser | { pendingOidc: boolean }>>(
+      '/api/auth/setup',
+      payload
+    );
+
+    if ('pendingOidc' in res.data.data && res.data.data.pendingOidc) {
+      window.location.assign('/api/auth/oidc/start');
+      return;
+    }
+
     setNeedsSetup(false);
-    setUser(res.data.data);
+    setUser(res.data.data as AuthUser);
   };
 
   const login = async (
@@ -128,7 +181,10 @@ export const AuthContextProvider = (props: Props): JSX.Element => {
         needsSetup,
         oidcEnabled,
         localLoginEnabled,
+        oidcProviderName,
         user,
+        snippetRun,
+        snippetAssist,
         refreshAuth,
         setup,
         login,

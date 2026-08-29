@@ -10,9 +10,13 @@ import {
 import Editor from '@monaco-editor/react';
 import type { OnMount } from '@monaco-editor/react';
 import copy from 'clipboard-copy';
-import { SnippetsContext, ThemeContext } from '../../store';
-import { NewSnippet } from '../../typescript/interfaces';
+import axios from 'axios';
+import { useHistory } from 'react-router-dom';
+import { AuthContext, SnippetsContext, ThemeContext } from '../../store';
+import { NewSnippet, Response } from '../../typescript/interfaces';
+import { readRawToken } from '../../utils';
 import { Button, Card } from '../UI';
+import { SnippetDocs } from './SnippetDocs';
 import languagesData from '../../data/languages.json';
 
 interface Props {
@@ -164,13 +168,28 @@ const detectLanguage = (code: string): DetectedLanguage => {
 
 export const SnippetForm = (props: Props): JSX.Element => {
   const { inEdit = false } = props;
-  const { createSnippet, currentSnippet, updateSnippet } =
+  const { createSnippet, currentSnippet, getSnippets, snippets, updateSnippet } =
     useContext(SnippetsContext);
   const { theme, themes, setTheme } = useContext(ThemeContext);
+  const { snippetAssist, refreshAuth } = useContext(AuthContext);
+  const assistReady =
+    snippetAssist.enabled || snippetAssist.providers.length > 0;
+  const history = useHistory();
   const editorRef = useRef<EditorInstance | null>(null);
   const [languageWasManual, setLanguageWasManual] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
+  const [docsTab, setDocsTab] = useState<'write' | 'preview'>('write');
+  const [assistPrompt, setAssistPrompt] = useState('');
+  const [assistProvider, setAssistProvider] = useState('');
+  const [assistTargets, setAssistTargets] = useState<string[]>([
+    'code',
+    'docs',
+    'tags',
+    'title'
+  ]);
+  const [assistBusy, setAssistBusy] = useState(false);
+  const [assistError, setAssistError] = useState('');
   const [detectedLanguage, setDetectedLanguage] = useState<DetectedLanguage>({
     language: '',
     confidence: 0
@@ -185,8 +204,20 @@ export const SnippetForm = (props: Props): JSX.Element => {
     isPinned: false,
     tags: [],
     collection: 'General',
-    fileName: ''
+    fileName: '',
+    isPublic: false
   });
+
+  useEffect(() => {
+    getSnippets();
+    refreshAuth();
+  }, []);
+
+  useEffect(() => {
+    if (!assistProvider && snippetAssist.providers[0]) {
+      setAssistProvider(snippetAssist.providers[0].id);
+    }
+  }, [assistProvider, snippetAssist.providers]);
 
   useEffect(() => {
     if (inEdit) {
@@ -307,6 +338,93 @@ export const SnippetForm = (props: Props): JSX.Element => {
     }
   };
 
+  const copyRawUrlCommand = () => {
+    if (!currentSnippet) {
+      return;
+    }
+
+    const rawRef = currentSnippet.rawSlug || currentSnippet.id;
+    const token = readRawToken(currentSnippet.id) || 'YOUR_SNIPPET_RAW_TOKEN';
+    copy(
+      `${window.location.origin}/raw/${rawRef}?key=${encodeURIComponent(token)}`
+    );
+  };
+
+  const copyCurlCommand = () => {
+    if (!currentSnippet) {
+      return;
+    }
+
+    const rawRef = currentSnippet.rawSlug || currentSnippet.id;
+    const token = readRawToken(currentSnippet.id) || 'YOUR_SNIPPET_RAW_TOKEN';
+    copy(
+      `curl -fsSL "${window.location.origin}/raw/${rawRef}?key=${encodeURIComponent(
+        token
+      )}"`
+    );
+  };
+
+  const toggleAssistTarget = (target: string) => {
+    setAssistTargets(current =>
+      current.includes(target)
+        ? current.filter(item => item !== target)
+        : [...current, target]
+    );
+  };
+
+  const runAssist = async (targets = assistTargets) => {
+    const prompt = assistPrompt.trim() || window.prompt('What should the assistant make?') || '';
+
+    if (!prompt) {
+      return;
+    }
+
+    setAssistBusy(true);
+    setAssistError('');
+
+    try {
+      const res = await axios.post<
+        Response<{
+          provider: string;
+          result: {
+            title?: string;
+            language?: string;
+            code?: string;
+            docs?: string;
+            tags?: string[];
+            description?: string;
+          };
+        }>
+      >('/api/snippets/assist', {
+        prompt,
+        provider: assistProvider || undefined,
+        targets,
+        snippet: formData
+      });
+      const next = res.data.data.result;
+      setFormData(current => ({
+        ...current,
+        title: next.title || current.title,
+        description: next.description || current.description,
+        language: next.language || current.language,
+        code: next.code ?? current.code,
+        docs: next.docs ?? current.docs,
+        tags: next.tags?.length ? next.tags : current.tags
+      }));
+      if (next.language) {
+        setLanguageWasManual(true);
+      }
+      if (next.docs) {
+        setDocsTab('write');
+      }
+      setAssistPrompt(prompt);
+    } catch (err) {
+      setAssistError('Assist failed. Check Admin AI keys and try again.');
+    } finally {
+      setAssistBusy(false);
+    }
+  };
+
   const commands = [
     { label: 'Format document', action: formatCodeHandler },
     { label: 'Copy code', action: copyCodeHandler },
@@ -314,10 +432,37 @@ export const SnippetForm = (props: Props): JSX.Element => {
     { label: 'Change language', action: changeLanguageCommand },
     { label: 'Use detected language', action: useDetectedLanguageHandler },
     { label: 'Cycle theme', action: cycleTheme },
-    { label: 'Clear editor', action: clearCodeHandler }
+    { label: 'Clear editor', action: clearCodeHandler },
+    { label: 'Search library', action: () => history.push('/snippets') },
+    ...(assistReady
+      ? [
+          { label: 'Generate code', action: () => runAssist(['code']) },
+          { label: 'Generate docs', action: () => runAssist(['docs']) },
+          { label: 'Generate tags', action: () => runAssist(['tags']) }
+        ]
+      : []),
+    ...(inEdit && currentSnippet
+      ? [
+          { label: 'Copy curl command', action: copyCurlCommand },
+          { label: 'Copy raw URL', action: copyRawUrlCommand },
+          {
+            label: 'Open version history',
+            action: () => history.push(`/snippet/${currentSnippet.id}`)
+          }
+        ]
+      : [])
   ].filter(command =>
     command.label.toLowerCase().includes(commandQuery.trim().toLowerCase())
   );
+
+  const collectionNames = Array.from(
+    new Set(
+      [
+        ...snippets.map(snippet => snippet.collection || 'General'),
+        formData.collection || 'General'
+      ].map(name => name.trim() || 'General')
+    )
+  ).sort((a, b) => a.localeCompare(b));
 
   const tagsToString = (): string => {
     return formData.tags.join(',');
@@ -400,6 +545,18 @@ export const SnippetForm = (props: Props): JSX.Element => {
                   outline
                   handler={clearCodeHandler}
                 />
+                {assistReady && (
+                  <Button
+                    text={assistBusy ? 'Working…' : 'Generate'}
+                    color='secondary'
+                    small
+                    handler={() => {
+                      if (!assistBusy) {
+                        runAssist();
+                      }
+                    }}
+                  />
+                )}
               </div>
               {commandPaletteOpen && (
                 <div className='command-palette-backdrop'>
@@ -470,6 +627,56 @@ export const SnippetForm = (props: Props): JSX.Element => {
 
           <div className='col-12 col-xxl-3 col-xl-4'>
             <Card classes='editor-side-panel'>
+              {assistReady && (
+                <div className='snippet-assist'>
+                  <h5 className='card-title mb-2'>AI assist</h5>
+                  {snippetAssist.providers.length > 0 && (
+                    <select
+                      className='form-control form-control-sm mb-2'
+                      value={assistProvider}
+                      onChange={e => setAssistProvider(e.target.value)}
+                    >
+                      {snippetAssist.providers.map(provider => (
+                        <option key={provider.id} value={provider.id}>
+                          {provider.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <textarea
+                    className='form-control mb-2'
+                    rows={3}
+                    value={assistPrompt}
+                    placeholder='Install docker on ubuntu, then document the flags'
+                    onChange={e => setAssistPrompt(e.target.value)}
+                  />
+                  <div className='snippet-assist-targets'>
+                    {['code', 'docs', 'tags', 'title'].map(target => (
+                      <label key={target}>
+                        <input
+                          type='checkbox'
+                          checked={assistTargets.includes(target)}
+                          onChange={() => toggleAssistTarget(target)}
+                        />
+                        {target}
+                      </label>
+                    ))}
+                  </div>
+                  {assistError && (
+                    <p className='text-danger mb-2'>{assistError}</p>
+                  )}
+                  <Button
+                    text={assistBusy ? 'Working…' : 'Generate'}
+                    color='secondary'
+                    small
+                    handler={() => {
+                      if (!assistBusy) {
+                        runAssist();
+                      }
+                    }}
+                  />
+                </div>
+              )}
               <h5 className='card-title mb-3'>Snippet details</h5>
 
               <div className='mb-3'>
@@ -552,8 +759,33 @@ export const SnippetForm = (props: Props): JSX.Element => {
                   name='collection'
                   value={formData.collection}
                   placeholder='Homelab'
+                  list='snippet-collections'
                   onChange={e => inputHandler(e)}
                 />
+                <datalist id='snippet-collections'>
+                  {collectionNames.map(name => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
+              </div>
+
+              <div className='mb-3 form-check'>
+                <input
+                  className='form-check-input'
+                  type='checkbox'
+                  id='isPublic'
+                  checked={Boolean(formData.isPublic)}
+                  onChange={e =>
+                    setFormData({
+                      ...formData,
+                      isPublic: e.target.checked
+                    })
+                  }
+                />
+                <label className='form-check-label' htmlFor='isPublic'>
+                  Public page. Anyone with the link can view this snippet and
+                  fetch <code>/raw</code> without a token.
+                </label>
               </div>
 
               <div className='mb-3'>
@@ -584,16 +816,44 @@ export const SnippetForm = (props: Props): JSX.Element => {
               )}
 
               <h5 className='card-title mb-3'>Documentation</h5>
+              <div className='docs-tabs' role='tablist'>
+                <button
+                  type='button'
+                  role='tab'
+                  aria-selected={docsTab === 'write'}
+                  className={docsTab === 'write' ? 'is-active' : ''}
+                  onClick={() => setDocsTab('write')}
+                >
+                  Write
+                </button>
+                <button
+                  type='button'
+                  role='tab'
+                  aria-selected={docsTab === 'preview'}
+                  className={docsTab === 'preview' ? 'is-active' : ''}
+                  onClick={() => setDocsTab('preview')}
+                >
+                  Preview
+                </button>
+              </div>
               <div className='mb-3'>
-                <textarea
-                  className='form-control docs-editor'
-                  id='docs'
-                  name='docs'
-                  rows={10}
-                  value={formData.docs}
-                  placeholder='`-r` flag stands for `--recursive`'
-                  onChange={e => inputHandler(e)}
-                ></textarea>
+                {docsTab === 'write' ? (
+                  <textarea
+                    className='form-control docs-editor'
+                    id='docs'
+                    name='docs'
+                    rows={10}
+                    value={formData.docs || ''}
+                    placeholder='`-r` flag stands for `--recursive`'
+                    onChange={e => inputHandler(e)}
+                  ></textarea>
+                ) : (formData.docs || '').trim() ? (
+                  <div className='docs-preview'>
+                    <SnippetDocs markdown={formData.docs || ''} />
+                  </div>
+                ) : (
+                  <p className='text-muted mb-0'>Nothing to preview yet.</p>
+                )}
               </div>
 
               <div className='d-grid'>

@@ -22,10 +22,25 @@ export const AuthGate = (props: Props): JSX.Element => {
   if (loading) {
     return (
       <main className='auth-shell'>
-        <div className='auth-panel'>
-          <p className='eyebrow'>Loading</p>
-          <h1>Preparing SnippyCode</h1>
-        </div>
+        <section className='auth-layout' aria-label='Loading SnippyCode'>
+          <aside className='auth-intro' aria-hidden='true'>
+            <div className='auth-mark'>
+              <img src='/CodeSnippy.png' alt='' />
+            </div>
+            <div className='auth-brand-copy'>
+              <p className='eyebrow'>SnippyCode</p>
+              <h1>Private library</h1>
+              <p>Preparing a workspace for snippets, raw links, and team workflows.</p>
+            </div>
+          </aside>
+          <div className='auth-panel auth-login-panel'>
+            <div className='auth-panel-heading'>
+              <p className='eyebrow'>Loading</p>
+              <h2>Preparing SnippyCode</h2>
+              <p>Checking this instance and restoring your session.</p>
+            </div>
+          </div>
+        </section>
       </main>
     );
   }
@@ -44,7 +59,7 @@ export const AuthGate = (props: Props): JSX.Element => {
 const SetupWizard = (): JSX.Element => {
   const { setup } = useContext(AuthContext);
   const [error, setError] = useState('');
-  const [oidcEnabled, setOidcEnabled] = useState(false);
+  const [mode, setMode] = useState<'local' | 'sso'>('local');
   const [formData, setFormData] = useState({
     email: '',
     displayName: '',
@@ -60,157 +75,223 @@ const SetupWizard = (): JSX.Element => {
     setError('');
 
     try {
+      if (mode === 'sso') {
+        await setup({
+          oidc: {
+            enabled: true,
+            issuerUrl: formData.issuerUrl,
+            clientId: formData.clientId,
+            clientSecret: formData.clientSecret,
+            redirectUri: formData.redirectUri
+          }
+        });
+        return;
+      }
+
       await setup({
         email: formData.email,
         displayName: formData.displayName,
-        password: formData.password,
-        oidc: {
-          enabled: oidcEnabled,
-          issuerUrl: formData.issuerUrl,
-          clientId: formData.clientId,
-          clientSecret: formData.clientSecret,
-          redirectUri: formData.redirectUri
-        }
+        password: formData.password
       });
     } catch (err) {
-      setError('Setup failed. Check the fields and try again.');
+      setError(
+        mode === 'sso'
+          ? 'SSO setup failed. Check the issuer and client details.'
+          : 'Setup failed. Check the fields and try again.'
+      );
     }
   };
 
   return (
     <main className='auth-shell'>
-      <form className='auth-panel auth-panel-wide' onSubmit={submitHandler}>
-        <p className='eyebrow'>First run</p>
-        <h1>Create the owner account</h1>
-        <p>Authentication is required before anyone can access snippets.</p>
-
-        {error && <div className='alert alert-danger'>{error}</div>}
-
-        <div className='row g-3'>
-          <div className='col-12 col-md-6'>
-            <label className='form-label' htmlFor='setup-email'>
-              Email
-            </label>
-            <input
-              id='setup-email'
-              className='form-control'
-              type='email'
-              value={formData.email}
-              required
-              onChange={e => setFormData({ ...formData, email: e.target.value })}
-            />
+      <section className='auth-layout auth-layout-setup' aria-label='SnippyCode first-run setup'>
+        <aside className='auth-intro' aria-hidden='true'>
+          <div className='auth-mark'>
+            <img src='/CodeSnippy.png' alt='' />
           </div>
-          <div className='col-12 col-md-6'>
-            <label className='form-label' htmlFor='setup-name'>
-              Display name
-            </label>
-            <input
-              id='setup-name'
-              className='form-control'
-              value={formData.displayName}
-              required
-              onChange={e =>
-                setFormData({ ...formData, displayName: e.target.value })
-              }
-            />
+          <div className='auth-brand-copy'>
+            <p className='eyebrow'>First run</p>
+            <h1>Claim this instance</h1>
+            <p>
+              {mode === 'sso'
+                ? 'Connect your identity provider. Owner name and email come from SSO.'
+                : 'Create the owner account before anyone can open the library. This workspace stays private to your team.'}
+            </p>
           </div>
-          <div className='col-12'>
-            <label className='form-label' htmlFor='setup-password'>
-              Password
-            </label>
-            <input
-              id='setup-password'
-              className='form-control'
-              type='password'
-              minLength={10}
-              required
-              value={formData.password}
-              onChange={e => setFormData({ ...formData, password: e.target.value })}
-            />
-          </div>
-        </div>
-
-        <hr />
-
-        <label className='form-check oidc-toggle'>
-          <input
-            className='form-check-input'
-            type='checkbox'
-            checked={oidcEnabled}
-            onChange={e => setOidcEnabled(e.target.checked)}
-          />
-          <span className='form-check-label'>Enable OIDC login</span>
-        </label>
-
-        {oidcEnabled && (
-          <div className='row g-3 mt-1'>
-            <div className='col-12'>
-              <label className='form-label' htmlFor='oidc-issuer'>
-                Issuer URL
-              </label>
-              <input
-                id='oidc-issuer'
-                className='form-control'
-                placeholder='https://accounts.google.com'
-                value={formData.issuerUrl}
-                onChange={e =>
-                  setFormData({ ...formData, issuerUrl: e.target.value })
-                }
-              />
+          <div className='auth-status-list'>
+            <div className='auth-status-item'>
+              <FontAwesomeIcon icon={faUserShield} />
+              <span>
+                {mode === 'sso'
+                  ? 'First SSO login becomes owner'
+                  : 'Owner owns the first account'}
+              </span>
             </div>
-            <div className='col-12 col-md-6'>
-              <label className='form-label' htmlFor='oidc-client'>
-                Client ID
-              </label>
-              <input
-                id='oidc-client'
-                className='form-control'
-                value={formData.clientId}
-                onChange={e =>
-                  setFormData({ ...formData, clientId: e.target.value })
-                }
-              />
+            <div className='auth-status-item'>
+              <FontAwesomeIcon icon={faShieldHalved} />
+              <span>Auth is required from day one</span>
             </div>
-            <div className='col-12 col-md-6'>
-              <label className='form-label' htmlFor='oidc-secret'>
-                Client secret
-              </label>
-              <input
-                id='oidc-secret'
-                className='form-control'
-                type='password'
-                value={formData.clientSecret}
-                onChange={e =>
-                  setFormData({ ...formData, clientSecret: e.target.value })
-                }
-              />
-            </div>
-            <div className='col-12'>
-              <label className='form-label' htmlFor='oidc-redirect'>
-                Redirect URI
-              </label>
-              <input
-                id='oidc-redirect'
-                className='form-control'
-                value={formData.redirectUri}
-                onChange={e =>
-                  setFormData({ ...formData, redirectUri: e.target.value })
-                }
-              />
+            <div className='auth-status-item'>
+              <FontAwesomeIcon icon={faKey} />
+              <span>
+                {mode === 'sso'
+                  ? 'Local passwords stay unused'
+                  : 'SSO can wait until later'}
+              </span>
             </div>
           </div>
-        )}
+        </aside>
 
-        <button type='submit' className='btn btn-primary auth-submit'>
-          Finish setup
-        </button>
-      </form>
+        <form className='auth-panel auth-login-panel' onSubmit={submitHandler}>
+          <div className='auth-panel-heading'>
+            <p className='eyebrow'>Owner setup</p>
+            <h2>{mode === 'sso' ? 'Connect SSO' : 'Create the owner account'}</h2>
+            <p>
+              {mode === 'sso'
+                ? 'Identity details come from your provider. You will sign in there next.'
+                : 'Authentication is required before anyone can access snippets.'}
+            </p>
+          </div>
+
+          <div className='auth-choice' role='group' aria-label='Authentication method'>
+            <button
+              type='button'
+              className={`auth-choice-button${mode === 'local' ? ' is-active' : ''}`}
+              onClick={() => setMode('local')}
+            >
+              <strong>Local</strong>
+              <span>Email, display name, and a password stored on this instance.</span>
+            </button>
+            <button
+              type='button'
+              className={`auth-choice-button${mode === 'sso' ? ' is-active' : ''}`}
+              onClick={() => setMode('sso')}
+            >
+              <strong>SSO</strong>
+              <span>Owner name and email come from your identity provider.</span>
+            </button>
+          </div>
+
+          {error && <div className='alert alert-danger auth-alert'>{error}</div>}
+
+          {mode === 'local' ? (
+            <div className='row g-3'>
+              <div className='col-12 col-md-6'>
+                <label className='form-label' htmlFor='setup-email'>
+                  Email
+                </label>
+                <input
+                  id='setup-email'
+                  className='form-control'
+                  type='email'
+                  value={formData.email}
+                  required
+                  onChange={e => setFormData({ ...formData, email: e.target.value })}
+                />
+              </div>
+              <div className='col-12 col-md-6'>
+                <label className='form-label' htmlFor='setup-name'>
+                  Display name
+                </label>
+                <input
+                  id='setup-name'
+                  className='form-control'
+                  value={formData.displayName}
+                  required
+                  onChange={e =>
+                    setFormData({ ...formData, displayName: e.target.value })
+                  }
+                />
+              </div>
+              <div className='col-12'>
+                <label className='form-label' htmlFor='setup-password'>
+                  Password
+                </label>
+                <input
+                  id='setup-password'
+                  className='form-control'
+                  type='password'
+                  minLength={10}
+                  required
+                  value={formData.password}
+                  onChange={e => setFormData({ ...formData, password: e.target.value })}
+                />
+              </div>
+            </div>
+          ) : (
+            <div className='row g-3'>
+              <div className='col-12'>
+                <label className='form-label' htmlFor='oidc-issuer'>
+                  Issuer URL
+                </label>
+                <input
+                  id='oidc-issuer'
+                  className='form-control'
+                  placeholder='https://auth.example.com/realms/app'
+                  value={formData.issuerUrl}
+                  required
+                  onChange={e =>
+                    setFormData({ ...formData, issuerUrl: e.target.value })
+                  }
+                />
+              </div>
+              <div className='col-12 col-md-6'>
+                <label className='form-label' htmlFor='oidc-client'>
+                  Client ID
+                </label>
+                <input
+                  id='oidc-client'
+                  className='form-control'
+                  value={formData.clientId}
+                  required
+                  onChange={e =>
+                    setFormData({ ...formData, clientId: e.target.value })
+                  }
+                />
+              </div>
+              <div className='col-12 col-md-6'>
+                <label className='form-label' htmlFor='oidc-secret'>
+                  Client secret
+                </label>
+                <input
+                  id='oidc-secret'
+                  className='form-control'
+                  type='password'
+                  value={formData.clientSecret}
+                  required
+                  onChange={e =>
+                    setFormData({ ...formData, clientSecret: e.target.value })
+                  }
+                />
+              </div>
+              <div className='col-12'>
+                <label className='form-label' htmlFor='oidc-redirect'>
+                  Redirect URI
+                </label>
+                <input
+                  id='oidc-redirect'
+                  className='form-control'
+                  value={formData.redirectUri}
+                  required
+                  onChange={e =>
+                    setFormData({ ...formData, redirectUri: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+          )}
+
+          <button type='submit' className='btn btn-primary auth-submit'>
+            {mode === 'sso' ? 'Continue with SSO' : 'Finish setup'}
+          </button>
+        </form>
+      </section>
     </main>
   );
 };
 
 const LoginScreen = (): JSX.Element => {
-  const { login, oidcEnabled, localLoginEnabled } = useContext(AuthContext);
+  const { login, oidcEnabled, localLoginEnabled, oidcProviderName } = useContext(AuthContext);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [mfaCode, setMfaCode] = useState('');
@@ -396,7 +477,7 @@ const LoginScreen = (): JSX.Element => {
               href='/api/auth/oidc/start'
             >
               <FontAwesomeIcon icon={faShieldHalved} />
-              <span>Continue with Provider</span>
+              <span>Continue with {oidcProviderName}</span>
             </a>
           )}
 

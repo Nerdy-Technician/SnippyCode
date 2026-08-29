@@ -12,13 +12,23 @@ export interface AuthStatus {
   needsSetup: boolean;
   oidcEnabled: boolean;
   localLoginEnabled: boolean;
+  oidcProviderName?: string;
   user: AuthUser | null;
+  snippetRun?: {
+    enabled: boolean;
+    languages: string[];
+    timeoutMs: number;
+  };
+  snippetAssist?: {
+    enabled: boolean;
+    providers: { id: 'openai' | 'anthropic'; label: string }[];
+  };
 }
 
 export interface SetupPayload {
-  email: string;
-  displayName: string;
-  password: string;
+  email?: string;
+  displayName?: string;
+  password?: string;
   oidc?: {
     enabled: boolean;
     issuerUrl: string;
@@ -31,5 +41,7 @@ export interface SetupPayload {
     nameClaim?: string;
     matchMode?: 'subject' | 'email' | 'subject_or_email';
     allowSignup?: boolean;
+    provider?: string;
+    providerName?: string;
   };
 }

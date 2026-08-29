@@ -16,8 +16,28 @@ interface ThemeContextValue {
   resetPrimaryColor: () => void;
 }
 
-const themeStorageKey = 'snippysafe-theme';
-const primaryStorageKey = 'snippysafe-primary-color';
+const themeStorageKey = 'snippycode-theme';
+const primaryStorageKey = 'snippycode-primary-color';
+const legacyThemeStorageKey = 'snippysafe-theme';
+const legacyPrimaryStorageKey = 'snippysafe-primary-color';
+
+const readLocalStorage = (key: string, legacyKey: string): string | null => {
+  const current = window.localStorage.getItem(key);
+
+  if (current) {
+    return current;
+  }
+
+  const legacy = window.localStorage.getItem(legacyKey);
+
+  if (legacy) {
+    window.localStorage.setItem(key, legacy);
+    window.localStorage.removeItem(legacyKey);
+    return legacy;
+  }
+
+  return null;
+};
 
 const themeOptions: ThemeOption[] = [
   { label: 'Moon', value: 'dark' },
@@ -44,11 +64,11 @@ interface Props {
 
 export const ThemeContextProvider = (props: Props): JSX.Element => {
   const [theme, setThemeState] = useState<AppTheme>(() => {
-    const storedTheme = window.localStorage.getItem(themeStorageKey);
+    const storedTheme = readLocalStorage(themeStorageKey, legacyThemeStorageKey);
     return isAppTheme(storedTheme) ? storedTheme : 'dark';
   });
   const [primaryColor, setPrimaryColorState] = useState(() => {
-    return window.localStorage.getItem(primaryStorageKey) || '#66d9c2';
+    return readLocalStorage(primaryStorageKey, legacyPrimaryStorageKey) || '#66d9c2';
   });
 
   useEffect(() => {

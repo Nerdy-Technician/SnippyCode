@@ -3,7 +3,8 @@ import jwt from 'jsonwebtoken';
 import { UserModel } from '../models';
 import { ErrorResponse, verifyRawApiKey } from '../utils';
 
-export const SESSION_COOKIE = 'snippysafe_session';
+export const SESSION_COOKIE = 'snippycode_session';
+const LEGACY_SESSION_COOKIE = 'snippysafe_session';
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -16,8 +17,20 @@ export interface AuthenticatedRequest extends Request {
   };
 }
 
-const effectiveRole = (user: { isOwner: boolean; role?: string }): string =>
-  user.isOwner ? 'owner' : user.role || 'user';
+export const effectiveRole = (user: {
+  isOwner: boolean;
+  role?: string;
+}): string => {
+  if (user.isOwner) {
+    return 'owner';
+  }
+
+  if (!user.role || user.role === 'user') {
+    return 'editor';
+  }
+
+  return user.role;
+};
 
 const roleRank: { [key: string]: number } = {
   viewer: 10,
@@ -184,12 +197,20 @@ export const setSessionCookie = (res: Response, userId: number): void => {
     secure: process.env.NODE_ENV === 'production',
     maxAge: 7 * 24 * 60 * 60 * 1000
   });
-};
-
-export const clearSessionCookie = (res: Response): void => {
-  res.clearCookie(SESSION_COOKIE, {
+  res.clearCookie(LEGACY_SESSION_COOKIE, {
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production'
   });
+};
+
+export const clearSessionCookie = (res: Response): void => {
+  const cookieOptions = {
+    httpOnly: true,
+    sameSite: 'lax' as const,
+    secure: process.env.NODE_ENV === 'production'
+  };
+
+  res.clearCookie(SESSION_COOKIE, cookieOptions);
+  res.clearCookie(LEGACY_SESSION_COOKIE, cookieOptions);
 };

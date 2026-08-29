@@ -10,7 +10,7 @@ const logger = new Logger('db');
 
 const databaseUrl =
   process.env.DATABASE_URL ||
-  'postgres://snippysafe:snippysafe@localhost:5432/snippysafe';
+  'postgres://snippycode:snippycode@localhost:5432/snippycode';
 
 // DB config
 export const sequelize = new Sequelize(databaseUrl, {

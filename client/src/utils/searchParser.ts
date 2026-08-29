@@ -1,27 +1,28 @@
 import { SearchQuery } from '../typescript/interfaces';
 
+const FILTER_PATTERN = /(tags|lang|collection):[a-zA-Z0-9_-]+(,[a-zA-Z0-9_-]+)*/g;
+
 export const searchParser = (rawQuery: string): SearchQuery => {
-  // Extract filters from query
   const tags = extractFilters(rawQuery, 'tags');
   const languages = extractFilters(rawQuery, 'lang');
-  const query = rawQuery.replaceAll(/(tags|lang):[a-zA-Z]+(,[a-zA-Z]+)*/g, '');
+  const collections = extractFilters(rawQuery, 'collection');
+  const query = rawQuery.replaceAll(FILTER_PATTERN, '');
 
   return {
     query: query.trim(),
     tags,
-    languages
+    languages,
+    collections
   };
 };
 
 const extractFilters = (query: string, filter: string): string[] => {
-  let filters: string[] = [];
-
-  const regex = new RegExp(filter + ':[a-zA-Z]+(,[a-zA-Z]+)*');
+  const regex = new RegExp(filter + ':[a-zA-Z0-9_-]+(,[a-zA-Z0-9_-]+)*');
   const matcher = query.match(regex);
 
-  if (matcher) {
-    filters = matcher[0].split(':')[1].split(',');
+  if (!matcher) {
+    return [];
   }
 
-  return filters;
+  return matcher[0].split(':')[1].split(',').filter(Boolean);
 };

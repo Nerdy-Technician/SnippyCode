@@ -1,15 +1,28 @@
-import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from 'react';
+import { ChangeEvent, FormEvent, useCallback, useContext, useEffect, useState } from 'react';
 import axios from 'axios';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
   faShieldHalved,
   faClipboardList,
   faDatabase,
+  faRobot,
   faServer,
   faUsers
 } from '@fortawesome/free-solid-svg-icons';
 import { Button, Card, Layout, PageHeader } from '../components/UI';
+import { AuthContext } from '../store';
 import { Response, Task } from '../typescript/interfaces';
+import {
+  AUDIT_ACTIONS,
+  auditActionLabel,
+  auditDetails,
+  auditGroup,
+  auditTargetLabel,
+  auditTone,
+  dateParser,
+  roleLabel
+} from '../utils';
+import copy from 'clipboard-copy';
 
 const iconUrl = (name: string): string =>
   `https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/${name}.svg`;
@@ -19,8 +32,37 @@ const oidcProviders = [
   { value: 'authentik', label: 'Authentik', icon: 'authentik' },
   { value: 'authelia', label: 'Authelia', icon: 'authelia' },
   { value: 'zitadel', label: 'Zitadel', icon: 'zitadel' },
-  { value: 'logto', label: 'Logto', icon: 'logto' }
+  { value: 'logto', label: 'Logto', icon: 'logto' },
+  { value: 'custom', label: 'Custom', icon: 'openid' }
 ];
+
+const matchOidcProvider = (provider?: string, providerName?: string) => {
+  const slug = String(provider || '').trim().toLowerCase();
+  const name = String(providerName || '').trim().toLowerCase();
+
+  if (!slug && !name) {
+    return oidcProviders[0];
+  }
+
+  const bySlug = oidcProviders.find(
+    candidate => candidate.value === slug && candidate.value !== 'custom'
+  );
+
+  if (bySlug) {
+    return bySlug;
+  }
+
+  const byName = oidcProviders.find(
+    candidate =>
+      candidate.value !== 'custom' && candidate.label.toLowerCase() === name
+  );
+
+  if (byName) {
+    return byName;
+  }
+
+  return oidcProviders.find(candidate => candidate.value === 'custom') || oidcProviders[0];
+};
 
 interface AdminOverview {
   github: {
@@ -42,12 +84,34 @@ interface AdminOverview {
     matchMode: 'subject' | 'email' | 'subject_or_email';
     allowSignup: boolean;
     localLoginEnabled: boolean;
+    provider: string;
+    providerName: string;
     clientSecretConfigured: boolean;
   };
   rawApiKey: {
     configured: boolean;
     prefix: string;
     createdAt: string | null;
+  };
+  ai: {
+    openai: {
+      enabled: boolean;
+      model: string;
+      connected: boolean;
+      email: string;
+      planType: string;
+    };
+    anthropic: {
+      enabled: boolean;
+      model: string;
+      connected: boolean;
+      email: string;
+      planType: string;
+    };
+    models?: {
+      openai: { id: string; label: string }[];
+      anthropic: { id: string; label: string }[];
+    };
   };
   snippets: {
     id: number;
@@ -95,6 +159,19 @@ interface GithubSyncResult {
   }[];
 }
 
+const openaiModelOptions = [
+  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra' },
+  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' },
+  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna' },
+  { id: 'gpt-5.5', label: 'GPT-5.5' }
+];
+
+const claudeModelOptions = [
+  { id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' },
+  { id: 'claude-opus-4-5', label: 'Claude Opus 4.5' },
+  { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' }
+];
+
 interface ImportPreview {
   total: number;
   valid: number;
@@ -109,7 +186,7 @@ interface ImportPreview {
 export const Admin = (): JSX.Element => {
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [activeTab, setActiveTab] = useState<
-    'github' | 'oidc' | 'library' | 'tasks' | 'audit' | 'users'
+    'github' | 'oidc' | 'ai' | 'library' | 'tasks' | 'audit' | 'users'
   >('github');
   const [message, setMessage] = useState('');
   const [oidcTest, setOidcTest] = useState<OidcTestResult | null>(null);
@@ -125,6 +202,11 @@ export const Admin = (): JSX.Element => {
   });
   const [pendingImport, setPendingImport] = useState<any | null>(null);
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [snippetBox, setSnippetBox] = useState({
+    url: '',
+    apiKey: '',
+    collection: 'Snippet Box'
+  });
   const [github, setGithub] = useState({
     owner: '',
     repo: '',
@@ -144,14 +226,31 @@ export const Admin = (): JSX.Element => {
     nameClaim: 'name',
     matchMode: 'subject_or_email',
     allowSignup: false,
-    localLoginEnabled: true
+    localLoginEnabled: true,
+    provider: 'keycloak',
+    providerName: 'Keycloak'
   });
+  const { user: currentUser, refreshAuth } = useContext(AuthContext);
   const [user, setUser] = useState({
     email: '',
     displayName: '',
     password: '',
-    role: 'user'
+    role: 'editor'
   });
+  const [revealedRawApiKey, setRevealedRawApiKey] = useState('');
+  const [ai, setAi] = useState({
+    openai: { enabled: false, model: 'gpt-5.6-terra' },
+    anthropic: { enabled: false, model: 'claude-sonnet-4-5' }
+  });
+  const [aiTest, setAiTest] = useState('');
+  const [openaiLogin, setOpenaiLogin] = useState<{
+    verificationUrl: string;
+    userCode: string;
+  } | null>(null);
+  const [anthropicLogin, setAnthropicLogin] = useState<{
+    authorizeUrl: string;
+    code: string;
+  } | null>(null);
 
   const loadOverview = useCallback((filters = {
     auditQuery: '',
@@ -182,7 +281,25 @@ export const Admin = (): JSX.Element => {
         nameClaim: res.data.data.oidc.nameClaim,
         matchMode: res.data.data.oidc.matchMode,
         allowSignup: res.data.data.oidc.allowSignup,
-        localLoginEnabled: res.data.data.oidc.localLoginEnabled
+        localLoginEnabled: res.data.data.oidc.localLoginEnabled,
+        provider: res.data.data.oidc.provider || 'keycloak',
+        providerName: res.data.data.oidc.providerName || 'Keycloak'
+      });
+      setOidcProvider(
+        matchOidcProvider(
+          res.data.data.oidc.provider,
+          res.data.data.oidc.providerName
+        )
+      );
+      setAi({
+        openai: {
+          enabled: Boolean(res.data.data.ai?.openai?.enabled),
+          model: res.data.data.ai?.openai?.model || 'gpt-5.6-terra'
+        },
+        anthropic: {
+          enabled: Boolean(res.data.data.ai?.anthropic?.enabled),
+          model: res.data.data.ai?.anthropic?.model || 'claude-sonnet-4-5'
+        }
       });
     });
   }, []);
@@ -191,11 +308,121 @@ export const Admin = (): JSX.Element => {
     loadOverview();
   }, [loadOverview]);
 
+  useEffect(() => {
+    if (!openaiLogin) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      axios
+        .post('/api/admin/ai/openai/login/poll')
+        .then(res => {
+          if (res.data.data.connected) {
+            setOpenaiLogin(null);
+            setAiTest('ChatGPT is connected.');
+            loadOverview();
+            refreshAuth();
+          }
+        })
+        .catch(err => {
+          setOpenaiLogin(null);
+          setAiTest(
+            err.response?.data?.error || 'ChatGPT sign-in failed.'
+          );
+        });
+    }, 3000);
+
+    return () => window.clearInterval(timer);
+  }, [openaiLogin, loadOverview, refreshAuth]);
+
   const saveGithub = (e: FormEvent) => {
     e.preventDefault();
     axios.put('/api/admin/github', github).then(() => {
       setMessage('GitHub repository settings saved.');
       loadOverview();
+    });
+  };
+
+  const saveAi = (e: FormEvent) => {
+    e.preventDefault();
+    setAiTest('');
+    axios.put('/api/admin/ai', ai).then(() => {
+      setMessage('AI assistant settings saved.');
+      loadOverview();
+      refreshAuth();
+    });
+  };
+
+  const testAi = (provider: 'openai' | 'anthropic') => {
+    setAiTest('');
+    axios
+      .post('/api/admin/ai/test', { provider, [provider]: ai[provider] })
+      .then(() => {
+        setAiTest(
+          provider === 'openai'
+            ? 'Codex responded successfully.'
+            : 'Claude Code responded successfully.'
+        );
+      })
+      .catch(err => {
+        setAiTest(
+          err.response?.data?.error ||
+            'Test failed. Sign in from this tab first, then try again.'
+        );
+      });
+  };
+
+  const startOpenaiLogin = () => {
+    setAiTest('');
+    axios.post('/api/admin/ai/openai/login').then(res => {
+      setOpenaiLogin(res.data.data);
+      window.open(res.data.data.verificationUrl, '_blank', 'noopener');
+    }).catch(err => {
+      setAiTest(err.response?.data?.error || 'Could not start ChatGPT sign-in.');
+    });
+  };
+
+  const startAnthropicLogin = () => {
+    setAiTest('');
+    axios.post('/api/admin/ai/anthropic/login/start').then(res => {
+      setAnthropicLogin({ ...res.data.data, code: '' });
+      window.open(res.data.data.authorizeUrl, '_blank', 'noopener');
+    }).catch(err => {
+      setAiTest(err.response?.data?.error || 'Could not start Claude sign-in.');
+    });
+  };
+
+  const completeAnthropicLogin = () => {
+    if (!anthropicLogin?.code.trim()) {
+      setAiTest('Paste the code Claude showed after you approved access.');
+      return;
+    }
+
+    axios
+      .post('/api/admin/ai/anthropic/login', { code: anthropicLogin.code })
+      .then(() => {
+        setAnthropicLogin(null);
+        setAiTest('Claude is connected.');
+        loadOverview();
+        refreshAuth();
+      })
+      .catch(err => {
+        setAiTest(err.response?.data?.error || 'Claude sign-in failed.');
+      });
+  };
+
+  const disconnectAi = (provider: 'openai' | 'anthropic') => {
+    axios.delete(`/api/admin/ai/${provider}/login`).then(() => {
+      if (provider === 'openai') {
+        setOpenaiLogin(null);
+      } else {
+        setAnthropicLogin(null);
+      }
+      setAiTest(
+        provider === 'openai' ? 'ChatGPT signed out.' : 'Claude signed out.'
+      );
+      loadOverview();
+      refreshAuth();
     });
   };
 
@@ -286,18 +513,80 @@ export const Admin = (): JSX.Element => {
 
   const createUser = (e: FormEvent) => {
     e.preventDefault();
-    axios.post('/api/admin/users', {
-      ...user,
-      isOwner: user.role === 'owner'
-    }).then(() => {
-      setMessage('User created.');
-      setUser({ email: '', displayName: '', password: '', role: 'user' });
-      loadOverview();
-    });
+    axios
+      .post('/api/admin/users', {
+        ...user,
+        isOwner: user.role === 'owner'
+      })
+      .then(() => {
+        setMessage('User created.');
+        setUser({ email: '', displayName: '', password: '', role: 'editor' });
+        loadOverview();
+      })
+      .catch(err => {
+        setMessage(err.response?.data?.error || 'Could not create user.');
+      });
+  };
+
+  const changeUserRole = (id: number, role: string) => {
+    axios
+      .patch(`/api/admin/users/${id}`, { role })
+      .then(() => {
+        setMessage('User role updated.');
+        loadOverview();
+      })
+      .catch(err => {
+        setMessage(err.response?.data?.error || 'Could not update user.');
+      });
+  };
+
+  const removeUser = (id: number, displayName: string) => {
+    if (!window.confirm(`Delete ${displayName}? This cannot be undone.`)) {
+      return;
+    }
+
+    axios
+      .delete(`/api/admin/users/${id}`)
+      .then(() => {
+        setMessage('User deleted.');
+        loadOverview();
+      })
+      .catch(err => {
+        setMessage(err.response?.data?.error || 'Could not delete user.');
+      });
   };
 
   const exportJson = () => {
     window.location.href = '/api/admin/export';
+  };
+
+  const generateRawApiKey = () => {
+    if (
+      overview?.rawApiKey.configured &&
+      !window.confirm(
+        'Regenerate the raw API key? The current key will stop working.'
+      )
+    ) {
+      return;
+    }
+
+    axios.post<Response<{ key: string }>>('/api/admin/raw-api-key').then(res => {
+      setRevealedRawApiKey(res.data.data.key);
+      setMessage('Raw API key generated. Copy it now; it will not be shown again.');
+      loadOverview();
+    });
+  };
+
+  const revokeRawApiKey = () => {
+    if (!window.confirm('Revoke the raw API key? Existing CI curl commands that use it will fail.')) {
+      return;
+    }
+
+    axios.delete('/api/admin/raw-api-key').then(() => {
+      setRevealedRawApiKey('');
+      setMessage('Raw API key revoked.');
+      loadOverview();
+    });
   };
 
   const importJson = (e: ChangeEvent<HTMLInputElement>) => {
@@ -339,11 +628,46 @@ export const Admin = (): JSX.Element => {
     });
   };
 
+  const previewSnippetBox = () => {
+    if (!snippetBox.url.trim()) {
+      setMessage('Enter the URL of a running Snippet Box instance.');
+      return;
+    }
+
+    axios
+      .post<Response<{ snippets: unknown[]; preview: ImportPreview }>>(
+        '/api/admin/import/snippet-box',
+        {
+          ...snippetBox,
+          preview: true
+        }
+      )
+      .then(res => {
+        setPendingImport({ snippets: res.data.data.snippets });
+        setImportPreview(res.data.data.preview);
+        setMessage(
+          `Import preview: ${res.data.data.preview.valid} valid snippets.`
+        );
+      })
+      .catch(err => {
+        setMessage(
+          err.response?.data?.error ||
+            'Could not import from that Snippet Box instance.'
+        );
+      });
+  };
+
   const selectOidcProvider = (value: string) => {
     const provider =
       oidcProviders.find(candidate => candidate.value === value) ||
       oidcProviders[0];
     setOidcProvider(provider);
+    setOidc({
+      ...oidc,
+      provider: provider.value,
+      providerName:
+        provider.value === 'custom' ? oidc.providerName : provider.label
+    });
   };
 
   return (
@@ -374,6 +698,16 @@ export const Admin = (): JSX.Element => {
           >
             <FontAwesomeIcon className='admin-fa-icon auth' icon={faShieldHalved} />
             OIDC Auth
+          </button>
+          <button
+            type='button'
+            role='tab'
+            className={activeTab === 'ai' ? 'active' : ''}
+            aria-selected={activeTab === 'ai'}
+            onClick={() => setActiveTab('ai')}
+          >
+            <FontAwesomeIcon className='admin-fa-icon' icon={faRobot} />
+            AI Assist
           </button>
           <button
             type='button'
@@ -603,7 +937,9 @@ export const Admin = (): JSX.Element => {
               <img src={iconUrl(oidcProvider.icon)} alt='' />
               <div>
                 <p className='eyebrow'>Authentication</p>
-                <h5 className='card-title'>{oidcProvider.label} OIDC setup</h5>
+                <h5 className='card-title'>
+                  {oidc.providerName || oidcProvider.label} OIDC setup
+                </h5>
               </div>
             </div>
             <form onSubmit={saveOidc}>
@@ -621,6 +957,23 @@ export const Admin = (): JSX.Element => {
                       </option>
                     ))}
                   </select>
+                </div>
+                <div className='col-12 col-md-6'>
+                  <label className='form-label'>Provider name</label>
+                  <input
+                    className='form-control'
+                    value={oidc.providerName}
+                    onChange={e => {
+                      const providerName = e.target.value;
+                      const matched = matchOidcProvider(undefined, providerName);
+                      setOidc({
+                        ...oidc,
+                        providerName,
+                        provider: matched.value
+                      });
+                      setOidcProvider(matched);
+                    }}
+                  />
                 </div>
                 <div className='col-12 col-md-6'>
                   <label className='form-check oidc-toggle mb-0'>
@@ -794,6 +1147,219 @@ export const Admin = (): JSX.Element => {
           </Card>
         )}
 
+        {activeTab === 'ai' && (
+          <Card classes='task-panel admin-tab-panel'>
+            <div className='admin-card-heading'>
+              <FontAwesomeIcon className='admin-fa-icon' icon={faRobot} />
+              <div>
+                <p className='eyebrow'>Assistants</p>
+                <h5 className='card-title'>Codex and Claude Code</h5>
+              </div>
+            </div>
+            <p className='text-muted'>
+              Sign in with your ChatGPT and Claude accounts. Editors can generate
+              snippet code, markdown docs, and tags from the editor. Tokens stay
+              on this server. Nothing is saved until they apply it.
+            </p>
+            <form onSubmit={saveAi}>
+              <div className='row g-4'>
+                <div className='col-12 col-lg-6'>
+                  <h6>OpenAI Codex</h6>
+                  <label className='form-check oidc-toggle mb-3'>
+                    <input
+                      className='form-check-input'
+                      type='checkbox'
+                      checked={ai.openai.enabled}
+                      onChange={e =>
+                        setAi({
+                          ...ai,
+                          openai: { ...ai.openai, enabled: e.target.checked }
+                        })
+                      }
+                    />
+                    <span className='form-check-label'>Enable Codex</span>
+                  </label>
+                  <p className='form-text mt-0 mb-3'>
+                    {overview?.ai?.openai.connected
+                      ? `Signed in${
+                          overview.ai.openai.email
+                            ? ` as ${overview.ai.openai.email}`
+                            : ''
+                        }${
+                          overview.ai.openai.planType
+                            ? ` (${overview.ai.openai.planType})`
+                            : ''
+                        }.`
+                      : 'Not signed in. Uses your ChatGPT Plus/Pro subscription.'}
+                  </p>
+                  <label className='form-label'>Model</label>
+                  <select
+                    className='form-control mb-3'
+                    value={ai.openai.model}
+                    onChange={e =>
+                      setAi({
+                        ...ai,
+                        openai: { ...ai.openai, model: e.target.value }
+                      })
+                    }
+                  >
+                    {(overview?.ai?.models?.openai || openaiModelOptions).map(
+                      option => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                        </option>
+                      )
+                    )}
+                  </select>
+                  {openaiLogin && (
+                    <div className='alert alert-info'>
+                      <p className='mb-2'>
+                        Open{' '}
+                        <a
+                          href={openaiLogin.verificationUrl}
+                          target='_blank'
+                          rel='noreferrer'
+                        >
+                          {openaiLogin.verificationUrl}
+                        </a>{' '}
+                        and enter this code:
+                      </p>
+                      <p className='mb-0'>
+                        <strong>{openaiLogin.userCode}</strong>
+                      </p>
+                    </div>
+                  )}
+                  <div className='admin-actions'>
+                    {overview?.ai?.openai.connected ? (
+                      <Button
+                        text='Sign out of ChatGPT'
+                        color='secondary'
+                        outline
+                        small
+                        handler={() => disconnectAi('openai')}
+                      />
+                    ) : (
+                      <Button
+                        text='Sign in with ChatGPT'
+                        color='secondary'
+                        handler={startOpenaiLogin}
+                      />
+                    )}
+                    <Button
+                      text='Test Codex'
+                      color='secondary'
+                      outline
+                      small
+                      handler={() => testAi('openai')}
+                    />
+                  </div>
+                </div>
+                <div className='col-12 col-lg-6'>
+                  <h6>Claude Code</h6>
+                  <label className='form-check oidc-toggle mb-3'>
+                    <input
+                      className='form-check-input'
+                      type='checkbox'
+                      checked={ai.anthropic.enabled}
+                      onChange={e =>
+                        setAi({
+                          ...ai,
+                          anthropic: {
+                            ...ai.anthropic,
+                            enabled: e.target.checked
+                          }
+                        })
+                      }
+                    />
+                    <span className='form-check-label'>Enable Claude Code</span>
+                  </label>
+                  <p className='form-text mt-0 mb-3'>
+                    {overview?.ai?.anthropic.connected
+                      ? `Signed in${
+                          overview.ai.anthropic.email
+                            ? ` as ${overview.ai.anthropic.email}`
+                            : ''
+                        }.`
+                      : 'Not signed in. Uses your Claude Pro/Max subscription.'}
+                  </p>
+                  <label className='form-label'>Model</label>
+                  <select
+                    className='form-control mb-3'
+                    value={ai.anthropic.model}
+                    onChange={e =>
+                      setAi({
+                        ...ai,
+                        anthropic: { ...ai.anthropic, model: e.target.value }
+                      })
+                    }
+                  >
+                    {(
+                      overview?.ai?.models?.anthropic || claudeModelOptions
+                    ).map(option => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  {anthropicLogin && (
+                    <div className='mb-3'>
+                      <label className='form-label'>
+                        Paste the code Claude showed after you approved access
+                      </label>
+                      <input
+                        className='form-control'
+                        value={anthropicLogin.code}
+                        placeholder='code#state'
+                        onChange={e =>
+                          setAnthropicLogin({
+                            ...anthropicLogin,
+                            code: e.target.value
+                          })
+                        }
+                      />
+                      <div className='admin-actions mt-2'>
+                        <Button
+                          text='Complete Claude sign-in'
+                          color='secondary'
+                          handler={completeAnthropicLogin}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  <div className='admin-actions'>
+                    {overview?.ai?.anthropic.connected ? (
+                      <Button
+                        text='Sign out of Claude'
+                        color='secondary'
+                        outline
+                        small
+                        handler={() => disconnectAi('anthropic')}
+                      />
+                    ) : (
+                      <Button
+                        text='Sign in with Claude'
+                        color='secondary'
+                        handler={startAnthropicLogin}
+                      />
+                    )}
+                    <Button
+                      text='Test Claude Code'
+                      color='secondary'
+                      outline
+                      small
+                      handler={() => testAi('anthropic')}
+                    />
+                  </div>
+                </div>
+              </div>
+              {aiTest && <p className='form-text mt-3 mb-0'>{aiTest}</p>}
+              <div className='admin-actions mt-3'>
+                <Button text='Save AI config' color='secondary' type='submit' />
+              </div>
+            </form>
+          </Card>
+        )}
+
         {activeTab === 'tasks' && (
           <Card classes='task-panel admin-tab-panel'>
             <div className='admin-card-heading'>
@@ -802,16 +1368,58 @@ export const Admin = (): JSX.Element => {
                 icon={faServer}
               />
               <div>
-                <p className='eyebrow'>Server tasks</p>
-                <h5 className='card-title'>History</h5>
+                <p className='eyebrow'>Jobs</p>
+                <h5 className='card-title'>Server tasks</h5>
               </div>
             </div>
+            <p className='text-muted'>
+              GitHub sync, library import/export, and AI tests are recorded here.
+            </p>
+            <div className='admin-actions mb-3'>
+              <Button
+                text='Download from GitHub'
+                color='secondary'
+                outline
+                handler={() =>
+                  runServerTask(
+                    '/api/admin/github/download',
+                    'Download task completed.'
+                  )
+                }
+              />
+              <Button
+                text='Upload to GitHub'
+                color='secondary'
+                outline
+                handler={() => runGithubUpload(false)}
+              />
+              <Button
+                text='Export JSON'
+                color='secondary'
+                outline
+                handler={exportJson}
+              />
+            </div>
             <div className='server-task-list'>
+              {(overview?.tasks || []).length === 0 && (
+                <article className='server-task-row'>
+                  <div>
+                    <strong>No jobs yet</strong>
+                    <p>
+                      Run a task above, or import/export from Library. Completed
+                      jobs will show up here.
+                    </p>
+                  </div>
+                </article>
+              )}
               {overview?.tasks.map(task => (
                 <article key={task.id} className='server-task-row'>
                   <div>
                     <strong>{task.title}</strong>
                     <p>{task.description}</p>
+                    {task.createdAt && (
+                      <small>{new Date(task.createdAt).toLocaleString()}</small>
+                    )}
                   </div>
                   <span
                     className={`task-priority ${
@@ -836,6 +1444,53 @@ export const Admin = (): JSX.Element => {
               <FontAwesomeIcon className='admin-fa-icon large' icon={faDatabase} />
               <div>
                 <p className='eyebrow'>Library</p>
+                <h5 className='card-title'>Raw API key</h5>
+              </div>
+            </div>
+            <p className='text-muted'>
+              A global key for CI and curl. It can fetch any snippet at
+              <code> /raw/:slug</code> with <code>?key=</code> or the
+              <code> x-api-key</code> header, without replacing per-snippet tokens.
+            </p>
+            <div className='profile-meta'>
+              <span>Status</span>
+              <strong>
+                {overview?.rawApiKey.configured
+                  ? `${overview.rawApiKey.prefix}...`
+                  : 'Not generated'}
+              </strong>
+            </div>
+            {revealedRawApiKey && (
+              <div className='raw-modal-row'>
+                <span>Key</span>
+                <code>{revealedRawApiKey}</code>
+                <button type='button' onClick={() => copy(revealedRawApiKey)}>
+                  Copy
+                </button>
+              </div>
+            )}
+            {revealedRawApiKey && (
+              <p className='raw-token-notice'>
+                Copy this key now. It will not be shown again.
+              </p>
+            )}
+            <div className='admin-actions mb-4'>
+              <Button
+                text={overview?.rawApiKey.configured ? 'Regenerate key' : 'Generate key'}
+                color='secondary'
+                handler={generateRawApiKey}
+              />
+              <Button
+                text='Revoke key'
+                color='danger'
+                outline
+                handler={revokeRawApiKey}
+              />
+            </div>
+            <hr />
+            <div className='admin-card-heading'>
+              <div>
+                <p className='eyebrow'>Backup</p>
                 <h5 className='card-title'>Import / export</h5>
               </div>
             </div>
@@ -849,6 +1504,63 @@ export const Admin = (): JSX.Element => {
                 Import JSON
                 <input type='file' accept='application/json' hidden onChange={importJson} />
               </label>
+            </div>
+            <hr />
+            <div className='admin-card-heading'>
+              <div>
+                <p className='eyebrow'>Migration</p>
+                <h5 className='card-title'>Import from Snippet Box</h5>
+              </div>
+            </div>
+            <p className='text-muted'>
+              Pull all snippets from a running original Snippet Box instance
+              (<code>GET /api/snippets</code>). Preview first, then confirm.
+            </p>
+            <div className='row g-3'>
+              <div className='col-12'>
+                <label className='form-label'>URL</label>
+                <input
+                  className='form-control'
+                  type='url'
+                  placeholder='https://snippet-box.example'
+                  value={snippetBox.url}
+                  onChange={e =>
+                    setSnippetBox({ ...snippetBox, url: e.target.value })
+                  }
+                />
+              </div>
+              <div className='col-12 col-md-6'>
+                <label className='form-label'>API key (optional)</label>
+                <input
+                  className='form-control'
+                  type='password'
+                  autoComplete='off'
+                  value={snippetBox.apiKey}
+                  onChange={e =>
+                    setSnippetBox({ ...snippetBox, apiKey: e.target.value })
+                  }
+                />
+              </div>
+              <div className='col-12 col-md-6'>
+                <label className='form-label'>Collection name</label>
+                <input
+                  className='form-control'
+                  value={snippetBox.collection}
+                  onChange={e =>
+                    setSnippetBox({
+                      ...snippetBox,
+                      collection: e.target.value
+                    })
+                  }
+                />
+              </div>
+            </div>
+            <div className='admin-actions mt-3'>
+              <Button
+                text='Preview Snippet Box import'
+                color='secondary'
+                handler={previewSnippetBox}
+              />
             </div>
             {importPreview && (
               <div className='import-preview'>
@@ -911,28 +1623,38 @@ export const Admin = (): JSX.Element => {
             >
               <input
                 className='form-control'
-                placeholder='Search action, target, metadata'
+                placeholder='Search'
                 value={auditFilters.auditQuery}
                 onChange={e =>
                   setAuditFilters({ ...auditFilters, auditQuery: e.target.value })
                 }
               />
-              <input
+              <select
                 className='form-control'
-                placeholder='Action'
                 value={auditFilters.auditAction}
-                onChange={e =>
-                  setAuditFilters({ ...auditFilters, auditAction: e.target.value })
-                }
-              />
+                onChange={e => {
+                  const next = { ...auditFilters, auditAction: e.target.value };
+                  setAuditFilters(next);
+                  loadOverview(next);
+                }}
+              >
+                <option value=''>Any action</option>
+                {AUDIT_ACTIONS.map(action => (
+                  <option key={action.id} value={action.id}>
+                    {action.label}
+                  </option>
+                ))}
+              </select>
               <select
                 className='form-control'
                 value={auditFilters.auditUserId}
-                onChange={e =>
-                  setAuditFilters({ ...auditFilters, auditUserId: e.target.value })
-                }
+                onChange={e => {
+                  const next = { ...auditFilters, auditUserId: e.target.value };
+                  setAuditFilters(next);
+                  loadOverview(next);
+                }}
               >
-                <option value=''>Any user</option>
+                <option value=''>Any person</option>
                 {overview?.users.map(account => (
                   <option key={account.id} value={account.id}>
                     {account.displayName}
@@ -941,7 +1663,7 @@ export const Admin = (): JSX.Element => {
               </select>
               <input
                 className='form-control'
-                placeholder='IP'
+                placeholder='IP address'
                 value={auditFilters.auditIp}
                 onChange={e =>
                   setAuditFilters({ ...auditFilters, auditIp: e.target.value })
@@ -949,22 +1671,47 @@ export const Admin = (): JSX.Element => {
               />
               <Button text='Filter' color='secondary' type='submit' />
             </form>
-            <div className='server-task-list'>
-              {overview?.auditLogs.map(entry => (
-                <article key={entry.id} className='server-task-row'>
+            <div className='audit-log-list'>
+              {(overview?.auditLogs || []).length === 0 && (
+                <article className='audit-log-row'>
                   <div>
-                    <strong>{entry.action}</strong>
-                    <p>
-                      {entry.target || 'system'}
-                      {entry.ipAddress ? ` · ${entry.ipAddress}` : ''}
-                    </p>
-                    <small>{entry.metadata}</small>
+                    <strong>No matching events</strong>
+                    <p>Try clearing the filters or wait for the next sign-in or edit.</p>
                   </div>
-                  <span className='task-priority low'>
-                    {new Date(entry.createdAt).toLocaleString()}
-                  </span>
                 </article>
-              ))}
+              )}
+              {overview?.auditLogs.map(entry => {
+                const actor =
+                  overview.users.find(account => account.id === entry.userId)
+                    ?.displayName || '';
+                const target = auditTargetLabel(entry.target, entry.metadata);
+                const details = auditDetails(entry.metadata);
+                const when = dateParser(entry.createdAt as unknown as Date);
+                const tone = auditTone(entry.action);
+                const facts = [actor, target, entry.ipAddress].filter(Boolean);
+
+                return (
+                  <article key={entry.id} className='audit-log-row'>
+                    <div>
+                      <div className='audit-log-heading'>
+                        <span className='audit-log-group'>{auditGroup(entry.action)}</span>
+                        <strong>{auditActionLabel(entry.action)}</strong>
+                      </div>
+                      {facts.length > 0 && <p>{facts.join(' · ')}</p>}
+                      {details.length > 0 && (
+                        <ul className='audit-log-details'>
+                          {details.map(line => (
+                            <li key={line}>{line}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                    <span className={`audit-log-time audit-log-time-${tone}`} title={when.formatted}>
+                      {when.relative}
+                    </span>
+                  </article>
+                );
+              })}
             </div>
           </Card>
         )}
@@ -1033,7 +1780,6 @@ export const Admin = (): JSX.Element => {
                     value={user.role}
                     onChange={e => setUser({ ...user, role: e.target.value })}
                   >
-                    <option value='user'>User</option>
                     <option value='viewer'>Viewer</option>
                     <option value='editor'>Editor</option>
                     <option value='admin'>Admin</option>
@@ -1055,17 +1801,46 @@ export const Admin = (): JSX.Element => {
                         <strong>{account.displayName}</strong>
                         <p>{account.email}</p>
                         <small>
-                          Role: {account.role || (account.isOwner ? 'owner' : 'user')} ·{' '}
                           {account.oidcSubject ? 'OIDC bound' : 'Local account'}
                           {account.mfaEnabled ? ' + MFA' : ''}
                         </small>
+                        <div className='user-account-actions'>
+                          <select
+                            className='form-control'
+                            value={
+                              account.isOwner
+                                ? 'owner'
+                                : account.role === 'user'
+                                ? 'editor'
+                                : account.role
+                            }
+                            onChange={e => changeUserRole(account.id, e.target.value)}
+                          >
+                            <option value='viewer'>Viewer</option>
+                            <option value='editor'>Editor</option>
+                            <option value='admin'>Admin</option>
+                            <option value='owner'>Owner</option>
+                          </select>
+                          <button
+                            type='button'
+                            className='btn btn-outline-danger btn-sm'
+                            disabled={currentUser?.id === account.id}
+                            onClick={() =>
+                              removeUser(account.id, account.displayName)
+                            }
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </div>
                       <span
                         className={`task-priority ${
-                          account.role === 'owner' || account.isOwner ? 'high' : 'low'
+                          account.role === 'owner' || account.isOwner
+                            ? 'high'
+                            : 'low'
                         }`}
                       >
-                        {account.role || (account.isOwner ? 'owner' : 'user')}
+                        {roleLabel(account.role, account.isOwner)}
                       </span>
                     </article>
                   ))}

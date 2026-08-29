@@ -2,7 +2,7 @@ import { Model, DataTypes } from 'sequelize';
 import { sequelize } from '../db';
 import { Snippet, SnippetCreationAttributes } from '../typescript/interfaces';
 
-const { INTEGER, STRING, DATE, TEXT } = DataTypes;
+const { INTEGER, STRING, DATE, TEXT, BOOLEAN } = DataTypes;
 
 export interface SnippetInstance
   extends Model<Snippet, SnippetCreationAttributes>,
@@ -67,6 +67,11 @@ export const SnippetModel = sequelize.define<SnippetInstance>(
     fileName: {
       type: STRING,
       allowNull: true
+    },
+    isPublic: {
+      type: BOOLEAN,
+      allowNull: false,
+      defaultValue: false
     },
     createdAt: {
       type: DATE

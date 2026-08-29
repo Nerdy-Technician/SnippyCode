@@ -1,7 +1,20 @@
 import { ChangeEvent, FormEvent, useContext, useEffect, useState } from 'react';
 import axios from 'axios';
-import { AuthContext, ThemeContext } from '../../store';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import {
+  faCircleHalfStroke,
+  faMoon,
+  faSun
+} from '@fortawesome/free-solid-svg-icons';
+import { AppTheme, AuthContext, ThemeContext } from '../../store';
 import { AuthUser, Response } from '../../typescript/interfaces';
+import { roleLabel } from '../../utils';
+
+const themeIcons = {
+  dark: faMoon,
+  light: faSun,
+  midnight: faCircleHalfStroke
+};
 
 interface Props {
   close: () => void;
@@ -10,7 +23,7 @@ interface Props {
 export const ProfileModal = (props: Props): JSX.Element | null => {
   const { user, updateProfile, uploadAvatar, deleteAvatar, logout } =
     useContext(AuthContext);
-  const { primaryColor, setPrimaryColor, resetPrimaryColor } =
+  const { theme, themes, setTheme, primaryColor, setPrimaryColor, resetPrimaryColor } =
     useContext(ThemeContext);
   const [displayName, setDisplayName] = useState(user?.displayName || '');
   const [email, setEmail] = useState(user?.email || '');
@@ -88,10 +101,14 @@ export const ProfileModal = (props: Props): JSX.Element | null => {
           <div>
             <p className='eyebrow'>Profile</p>
             <h2>{user.displayName}</h2>
-            <p>Manage your account identity and profile picture.</p>
           </div>
-          <button type='button' className='profile-close' onClick={props.close}>
-            Close
+          <button
+            type='button'
+            className='profile-close'
+            aria-label='Close'
+            onClick={props.close}
+          >
+            ×
           </button>
         </div>
         {error && <div className='alert alert-danger'>{error}</div>}
@@ -120,10 +137,6 @@ export const ProfileModal = (props: Props): JSX.Element | null => {
                 Remove picture
               </button>
             </div>
-            <p className='profile-hint'>
-              If no image is uploaded, SnippyCode will use your Gravatar when
-              one is available.
-            </p>
           </aside>
           <form className='profile-form' onSubmit={submitHandler}>
             <label className='form-label' htmlFor='profile-name'>
@@ -131,7 +144,7 @@ export const ProfileModal = (props: Props): JSX.Element | null => {
             </label>
             <input
               id='profile-name'
-              className='form-control mb-3'
+              className='form-control mb-2'
               value={displayName}
               onChange={e => setDisplayName(e.target.value)}
             />
@@ -140,14 +153,14 @@ export const ProfileModal = (props: Props): JSX.Element | null => {
             </label>
             <input
               id='profile-email'
-              className='form-control mb-3'
+              className='form-control mb-2'
               type='email'
               value={email}
               onChange={e => setEmail(e.target.value)}
             />
             <div className='profile-meta'>
               <span>Role</span>
-              <strong>{user.isOwner ? 'Owner' : 'Member'}</strong>
+              <strong>{roleLabel(user.role, user.isOwner)}</strong>
             </div>
             <div className='profile-meta'>
               <span>MFA</span>
@@ -156,8 +169,25 @@ export const ProfileModal = (props: Props): JSX.Element | null => {
             <section className='profile-theme-panel'>
               <div>
                 <p className='eyebrow'>Appearance</p>
-                <h3>Primary colour</h3>
+                <h3>Theme</h3>
               </div>
+              <div className='theme-switcher' aria-label='Theme'>
+                {themes.map(option => (
+                  <button
+                    key={option.value}
+                    type='button'
+                    className={theme === option.value ? 'active' : ''}
+                    title={`${option.label} theme`}
+                    aria-label={`${option.label} theme`}
+                    aria-pressed={theme === option.value}
+                    onClick={() => setTheme(option.value as AppTheme)}
+                  >
+                    <FontAwesomeIcon icon={themeIcons[option.value]} />
+                    <span>{option.label}</span>
+                  </button>
+                ))}
+              </div>
+              <h3>Primary colour</h3>
               <div className='profile-color-row'>
                 <label
                   className='profile-color-swatch'

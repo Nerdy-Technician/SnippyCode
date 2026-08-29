@@ -31,7 +31,7 @@ const requestGithub = <T>(options: GithubRequestOptions): Promise<T> => {
           Accept: 'application/vnd.github+json',
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
-          'User-Agent': 'snippysafe',
+          'User-Agent': 'snippycode',
           'X-GitHub-Api-Version': '2022-11-28',
           ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {})
         }

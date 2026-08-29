@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import { Request, Response, NextFunction } from 'express';
 import { Issuer } from 'openid-client';
 import { Op } from 'sequelize';
-import { asyncWrapper } from '../middleware';
+import { asyncWrapper, AuthenticatedRequest } from '../middleware';
 import {
   AuditLogModel,
   SettingModel,
@@ -22,7 +22,8 @@ import {
   requestIp,
   tagParser,
   testGithubRepositoryAccess,
-  upsertGithubFile
+  upsertGithubFile,
+  fetchSnippetBoxSnippets
 } from '../utils';
 import {
   createRawApiKey,
@@ -33,9 +34,26 @@ import {
   defaultOidcSettings,
   getOidcSettings,
   OidcMatchMode,
+  persistOidcProvider,
+  persistOidcProviderName,
   publicOidcSettings,
   setSetting as setSharedSetting
 } from '../utils/oidcSettings';
+import {
+  getAiSettings,
+  publicAiSettings,
+  resolveClaudeModel,
+  resolveCodexModel,
+  saveAiSettings
+} from '../utils/aiSettings';
+import { testAiProvider } from '../utils/aiAssist';
+import {
+  completeClaudeLogin,
+  disconnectAiProvider,
+  pollCodexDeviceLogin,
+  startClaudeLogin,
+  startCodexDeviceLogin
+} from '../utils/aiOAuth';
 
 interface GithubSettings {
   token: string;
@@ -66,6 +84,55 @@ const setSetting = async (key: string, value: unknown): Promise<void> => {
 const auditActor = (req: Request) => ({
   userId: (req as any).user?.id || null,
   ipAddress: requestIp(req)
+});
+
+const ASSIGNABLE_ROLES = ['viewer', 'editor', 'admin', 'owner'] as const;
+type AssignableRole = typeof ASSIGNABLE_ROLES[number];
+
+const normalizeRole = (
+  role: unknown,
+  fallback: AssignableRole = 'editor'
+): AssignableRole => {
+  const value = String(role || '').trim();
+
+  if (value === 'user') {
+    return 'editor';
+  }
+
+  if ((ASSIGNABLE_ROLES as readonly string[]).includes(value)) {
+    return value as AssignableRole;
+  }
+
+  return fallback;
+};
+
+const isOwnerAccount = (user: { isOwner: boolean; role?: string }): boolean =>
+  Boolean(user.isOwner || user.role === 'owner');
+
+const countOtherOwners = async (excludeId: number): Promise<number> =>
+  UserModel.count({
+    where: {
+      id: { [Op.ne]: excludeId },
+      [Op.or]: [{ isOwner: true }, { role: 'owner' }]
+    }
+  });
+
+const publicAccount = (user: {
+  id: number;
+  email: string;
+  displayName: string;
+  isOwner: boolean;
+  role: string;
+  mfaEnabled: boolean;
+  oidcSubject?: string | null;
+}) => ({
+  id: user.id,
+  email: user.email,
+  displayName: user.displayName,
+  isOwner: user.isOwner,
+  role: user.role === 'user' ? 'editor' : user.role,
+  mfaEnabled: user.mfaEnabled,
+  oidcSubject: user.oidcSubject
 });
 
 const getGithubSettings = async (): Promise<GithubSettings> =>
@@ -162,6 +229,89 @@ const createServerTask = async (
     priority: 'medium'
   });
 
+const AUDIT_JOB_TITLES: Record<string, string> = {
+  'library.exported': 'Export library JSON',
+  'library.imported': 'Import library JSON',
+  'library.snippet_box.fetched': 'Import from Snippet Box',
+  'ai.tested': 'Test AI assistant'
+};
+
+const parseJobMetadata = (raw: string): Record<string, any> => {
+  try {
+    return JSON.parse(raw || '{}');
+  } catch {
+    return {};
+  }
+};
+
+const describeAuditJob = (action: string, metadata: Record<string, any>): string => {
+  if (action === 'library.imported') {
+    return `Imported ${Number(metadata.imported) || 0} snippets.`;
+  }
+  if (action === 'library.exported') {
+    return `Exported ${Number(metadata.count) || 0} snippets.`;
+  }
+  if (action === 'library.snippet_box.fetched') {
+    const host = String(metadata.host || 'Snippet Box');
+    return `Fetched ${Number(metadata.count) || 0} snippets from ${host}.`;
+  }
+  if (action === 'ai.tested') {
+    const provider = metadata.provider === 'anthropic' ? 'Claude' : 'Codex';
+    return `Tested ${provider}${metadata.model ? ` (${metadata.model})` : ''}.`;
+  }
+
+  return '';
+};
+
+const listServerTasks = async () => {
+  let stored: any[] = [];
+
+  try {
+    stored = (
+      await TaskModel.findAll({
+        order: [['createdAt', 'DESC']],
+        limit: 20
+      })
+    ).map(task => task.get({ plain: true }));
+  } catch {
+    stored = [];
+  }
+
+  const logs = await AuditLogModel.findAll({
+    where: { action: { [Op.in]: Object.keys(AUDIT_JOB_TITLES) } },
+    order: [['createdAt', 'DESC']],
+    limit: 20
+  });
+
+  const fromAudit = logs
+    .map(entry => {
+      const metadata = parseJobMetadata(entry.metadata);
+
+      if (entry.action === 'library.snippet_box.fetched' && metadata.preview) {
+        return null;
+      }
+
+      return {
+        id: Number(entry.id) + 1000000,
+        title: AUDIT_JOB_TITLES[entry.action],
+        description: describeAuditJob(entry.action, metadata),
+        status: 'done' as const,
+        priority: 'medium' as const,
+        dueDate: null,
+        createdAt: entry.createdAt,
+        updatedAt: entry.createdAt
+      };
+    })
+    .filter(Boolean);
+
+  return [...stored, ...fromAudit]
+    .sort(
+      (left, right) =>
+        new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+    )
+    .slice(0, 20);
+};
+
 const buildGithubFilesForSnippet = (rawSnippet: any, settings: GithubSettings) => {
   const tags = rawSnippet.tags?.map((tag: { name: string }) => tag.name) || [];
   const slug = slugify(rawSnippet.title) || `snippet-${rawSnippet.id}`;
@@ -245,7 +395,9 @@ export const getAdminOverview = asyncWrapper(
     const auditWhere: any = {};
 
     if (auditAction) {
-      auditWhere.action = { [Op.substring]: auditAction };
+      auditWhere.action = auditAction.includes('.')
+        ? auditAction
+        : { [Op.substring]: auditAction };
     }
 
     if (auditUserId) {
@@ -264,7 +416,8 @@ export const getAdminOverview = asyncWrapper(
       ];
     }
 
-    const [users, tasks, auditLogs, github, oidc, rawApiKey, snippets] = await Promise.all([
+    const [users, tasks, auditLogs, github, oidc, rawApiKey, snippets, ai] =
+      await Promise.all([
       UserModel.findAll({
         attributes: [
           'id',
@@ -277,7 +430,7 @@ export const getAdminOverview = asyncWrapper(
           'createdAt'
         ]
       }),
-      TaskModel.findAll({ order: [['createdAt', 'DESC']], limit: 20 }),
+      listServerTasks(),
       AuditLogModel.findAll({
         where: auditWhere,
         order: [['createdAt', 'DESC']],
@@ -289,7 +442,8 @@ export const getAdminOverview = asyncWrapper(
       SnippetModel.findAll({
         attributes: ['id', 'title', 'language', 'updatedAt'],
         order: [['updatedAt', 'DESC']]
-      })
+      }),
+      getAiSettings()
     ]);
 
     res.status(200).json({
@@ -297,8 +451,9 @@ export const getAdminOverview = asyncWrapper(
         github: publicGithubSettings(github),
         oidc: publicOidcSettings(oidc),
         rawApiKey: publicRawApiKeySettings(rawApiKey),
+        ai: publicAiSettings(ai),
         snippets,
-        users,
+        users: users.map(user => publicAccount(user)),
         tasks,
         auditLogs
       }
@@ -363,7 +518,12 @@ export const updateOidcSettings = asyncWrapper(
         ? (matchMode as OidcMatchMode)
         : 'subject_or_email',
       allowSignup: Boolean(req.body.allowSignup),
-      localLoginEnabled: req.body.localLoginEnabled !== false
+      localLoginEnabled: req.body.localLoginEnabled !== false,
+      provider: persistOidcProvider(req.body.provider, existing.provider),
+      providerName: persistOidcProviderName(
+        req.body.providerName,
+        existing.providerName
+      )
     };
 
     await setSharedSetting('oidc', settings);
@@ -441,6 +601,160 @@ export const updateGithubSettings = asyncWrapper(
   }
 );
 
+export const updateAiSettings = asyncWrapper(
+  async (req: Request, res: Response): Promise<void> => {
+    const existing = await getAiSettings();
+    const openai = req.body.openai || {};
+    const anthropic = req.body.anthropic || {};
+    const settings = {
+      openai: {
+        ...existing.openai,
+        enabled: Boolean(openai.enabled),
+        model: resolveCodexModel(openai.model || existing.openai.model)
+      },
+      anthropic: {
+        ...existing.anthropic,
+        enabled: Boolean(anthropic.enabled),
+        model: resolveClaudeModel(
+          anthropic.model || existing.anthropic.model
+        )
+      }
+    };
+
+    await saveAiSettings(settings);
+    await auditLog('ai.updated', {
+      ...auditActor(req),
+      metadata: publicAiSettings(settings)
+    });
+
+    res.status(200).json({ data: publicAiSettings(settings) });
+  }
+);
+
+export const startOpenaiAiLogin = asyncWrapper(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const data = await startCodexDeviceLogin();
+      await auditLog('ai.login.started', {
+        ...auditActor(req),
+        metadata: { provider: 'openai' }
+      });
+      res.status(200).json({ data });
+    } catch (err) {
+      return next(
+        new ErrorResponse(
+          400,
+          err instanceof Error ? err.message : 'Could not start ChatGPT sign-in'
+        )
+      );
+    }
+  }
+);
+
+export const pollOpenaiAiLogin = asyncWrapper(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const data = await pollCodexDeviceLogin();
+
+      if (data.connected) {
+        await auditLog('ai.login.connected', {
+          ...auditActor(req),
+          metadata: { provider: 'openai' }
+        });
+      }
+
+      res.status(200).json({ data });
+    } catch (err) {
+      return next(
+        new ErrorResponse(
+          400,
+          err instanceof Error ? err.message : 'ChatGPT sign-in failed'
+        )
+      );
+    }
+  }
+);
+
+export const startAnthropicAiLogin = asyncWrapper(
+  async (req: Request, res: Response): Promise<void> => {
+    const data = startClaudeLogin();
+    await auditLog('ai.login.started', {
+      ...auditActor(req),
+      metadata: { provider: 'anthropic' }
+    });
+    res.status(200).json({ data });
+  }
+);
+
+export const completeAnthropicAiLogin = asyncWrapper(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await completeClaudeLogin(String(req.body.code || ''));
+      await auditLog('ai.login.connected', {
+        ...auditActor(req),
+        metadata: { provider: 'anthropic' }
+      });
+      res.status(200).json({ data: { connected: true } });
+    } catch (err) {
+      return next(
+        new ErrorResponse(
+          400,
+          err instanceof Error ? err.message : 'Claude sign-in failed'
+        )
+      );
+    }
+  }
+);
+
+export const disconnectAiLogin = asyncWrapper(
+  async (req: Request, res: Response): Promise<void> => {
+    const provider =
+      String(req.params.provider || '').trim() === 'anthropic'
+        ? 'anthropic'
+        : 'openai';
+    await disconnectAiProvider(provider);
+    await auditLog('ai.login.disconnected', {
+      ...auditActor(req),
+      metadata: { provider }
+    });
+    res.status(200).json({ data: { connected: false } });
+  }
+);
+
+export const testAiSettings = asyncWrapper(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const existing = await getAiSettings();
+    const provider =
+      String(req.body.provider || '').trim() === 'anthropic'
+        ? 'anthropic'
+        : 'openai';
+    const incoming = req.body[provider] || {};
+    const model =
+      String(incoming.model || '').trim() || existing[provider].model;
+
+    try {
+      const result = await testAiProvider(provider, model);
+      await createServerTask(
+        'Test AI assistant',
+        'done',
+        `Tested ${provider === 'anthropic' ? 'Claude' : 'Codex'} (${result.model}).`
+      );
+      await auditLog('ai.tested', {
+        ...auditActor(req),
+        metadata: { provider, model: result.model, ok: result.ok }
+      });
+      res.status(200).json({ data: result });
+    } catch (err) {
+      return next(
+        new ErrorResponse(
+          400,
+          err instanceof Error ? err.message : 'AI test failed'
+        )
+      );
+    }
+  }
+);
+
 export const testGithubSettings = asyncWrapper(
   async (req: Request, res: Response): Promise<void> => {
     const existing = await getGithubSettings();
@@ -467,13 +781,9 @@ export const createUser = asyncWrapper(
     const email = String(req.body.email || '').trim().toLowerCase();
     const displayName = String(req.body.displayName || '').trim();
     const password = String(req.body.password || '');
-    const role = (['owner', 'admin', 'editor', 'viewer', 'user'].includes(
-      String(req.body.role)
-    )
-      ? String(req.body.role)
-      : req.body.isOwner
+    const role = req.body.isOwner
       ? 'owner'
-      : 'user') as 'owner' | 'admin' | 'editor' | 'viewer' | 'user';
+      : normalizeRole(req.body.role);
 
     if (!email || !displayName || password.length < 10) {
       return next(
@@ -498,14 +808,77 @@ export const createUser = asyncWrapper(
     });
 
     res.status(201).json({
-      data: {
-        id: user.id,
-        email: user.email,
-        displayName: user.displayName,
-        isOwner: user.isOwner,
-        role: user.role,
-        mfaEnabled: user.mfaEnabled
+      data: publicAccount(user)
+    });
+  }
+);
+
+export const updateUser = asyncWrapper(
+  async (
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> => {
+    const user = await UserModel.findByPk(Number(req.params.id));
+
+    if (!user) {
+      return next(new ErrorResponse(404, 'User not found'));
+    }
+
+    const role = normalizeRole(req.body.role, isOwnerAccount(user) ? 'owner' : 'editor');
+
+    if (isOwnerAccount(user) && role !== 'owner') {
+      const otherOwners = await countOtherOwners(user.id);
+
+      if (otherOwners === 0) {
+        return next(new ErrorResponse(400, 'Cannot demote the last owner'));
       }
+    }
+
+    user.role = role;
+    user.isOwner = role === 'owner';
+    await user.save();
+    await auditLog('user.updated', {
+      ...auditActor(req),
+      target: `user:${user.id}`,
+      metadata: { role }
+    });
+
+    res.status(200).json({
+      data: publicAccount(user)
+    });
+  }
+);
+
+export const deleteUser = asyncWrapper(
+  async (
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> => {
+    const user = await UserModel.findByPk(Number(req.params.id));
+
+    if (!user) {
+      return next(new ErrorResponse(404, 'User not found'));
+    }
+
+    if (req.user?.id === user.id) {
+      return next(new ErrorResponse(400, 'You cannot delete your own account'));
+    }
+
+    if (isOwnerAccount(user) && (await countOtherOwners(user.id)) === 0) {
+      return next(new ErrorResponse(400, 'Cannot delete the last owner'));
+    }
+
+    await user.destroy();
+    await auditLog('user.deleted', {
+      ...auditActor(req),
+      target: `user:${user.id}`,
+      metadata: { email: user.email }
+    });
+
+    res.status(200).json({
+      data: { id: user.id }
     });
   }
 );
@@ -741,12 +1114,17 @@ export const exportLibraryJson = asyncWrapper(
       };
     });
 
+    await createServerTask(
+      'Export library JSON',
+      'done',
+      `Exported ${data.length} snippets.`
+    );
     await auditLog('library.exported', {
       ...auditActor(req),
       metadata: { count: data.length }
     });
 
-    res.setHeader('Content-Disposition', 'attachment; filename=\"snippysafe-export.json\"');
+    res.setHeader('Content-Disposition', 'attachment; filename=\"snippycode-export.json\"');
     res.status(200).json({
       exportedAt: new Date().toISOString(),
       snippets: data
@@ -788,11 +1166,64 @@ export const importLibraryJson = asyncWrapper(
       imported += 1;
     }
 
+    await createServerTask(
+      'Import library JSON',
+      'done',
+      `Imported ${imported} snippets.`
+    );
     await auditLog('library.imported', {
       ...auditActor(req),
       metadata: { imported }
     });
 
     res.status(201).json({ data: { imported } });
+  }
+);
+
+export const importSnippetBox = asyncWrapper(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const snippets = await fetchSnippetBoxSnippets({
+        url: req.body.url,
+        apiKey: req.body.apiKey,
+        collection: req.body.collection
+      });
+
+      let sourceHost = '';
+      try {
+        sourceHost = new URL(String(req.body.url || '').trim()).host;
+      } catch (err) {
+        sourceHost = '';
+      }
+
+      await auditLog('library.snippet_box.fetched', {
+        ...auditActor(req),
+        metadata: {
+          host: sourceHost,
+          count: snippets.length,
+          preview: Boolean(req.body.preview)
+        }
+      });
+
+      if (req.body.preview) {
+        res.status(200).json({
+          data: {
+            snippets,
+            preview: importPreviewForPayload({ snippets })
+          }
+        });
+        return;
+      }
+
+      req.body.snippets = snippets;
+      return importLibraryJson(req, res, next);
+    } catch (err) {
+      return next(
+        new ErrorResponse(
+          400,
+          err instanceof Error ? err.message : 'Could not import from Snippet Box'
+        )
+      );
+    }
   }
 );

@@ -14,8 +14,9 @@ export interface Snippet extends Model {
   rawSlug?: string | null;
   collection: string;
   fileName?: string | null;
+  isPublic: boolean;
   tags?: { name: string }[];
 }
 
 export interface SnippetCreationAttributes
-  extends Optional<Snippet, 'id' | 'createdAt' | 'updatedAt' | 'rawTokenHash' | 'rawTokenPrefix' | 'rawTokenCreatedAt' | 'rawSlug' | 'collection' | 'fileName'> {}
+  extends Optional<Snippet, 'id' | 'createdAt' | 'updatedAt' | 'rawTokenHash' | 'rawTokenPrefix' | 'rawTokenCreatedAt' | 'rawSlug' | 'collection' | 'fileName' | 'isPublic'> {}

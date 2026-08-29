@@ -13,6 +13,7 @@ import {
 export const SnippetsContext = createContext<Context>({
   snippets: [],
   searchResults: [],
+  searchActive: false,
   currentSnippet: null,
   tagCount: [],
   getSnippets: () => {},
@@ -21,9 +22,12 @@ export const SnippetsContext = createContext<Context>({
   createSnippet: (snippet: NewSnippet) => {},
   updateSnippet: (snippet: NewSnippet, id: number, isLocal?: boolean) => {},
   deleteSnippet: (id: number) => {},
+  duplicateSnippet: (id: number) => {},
+  renameCollection: async () => {},
   toggleSnippetPin: (id: number) => {},
   countTags: () => {},
-  searchSnippets: (query: SearchQuery) => {}
+  searchSnippets: (query: SearchQuery) => {},
+  clearSearch: () => {}
 });
 
 interface Props {
@@ -33,6 +37,7 @@ interface Props {
 export const SnippetsContextProvider = (props: Props): JSX.Element => {
   const [snippets, setSnippets] = useState<Snippet[]>([]);
   const [searchResults, setSearchResults] = useState<Snippet[]>([]);
+  const [searchActive, setSearchActive] = useState(false);
   const [currentSnippet, setCurrentSnippet] = useState<Snippet | null>(null);
   const [tagCount, setTagCount] = useState<TagCount[]>([]);
 
@@ -52,7 +57,22 @@ export const SnippetsContextProvider = (props: Props): JSX.Element => {
   const getSnippetById = (id: number): void => {
     axios
       .get<Response<Snippet>>(`/api/snippets/${id}`)
-      .then(res => setCurrentSnippet(res.data.data))
+      .then(res => {
+        setCurrentSnippet(res.data.data);
+        setSnippets(current => {
+          const idx = current.findIndex(s => s.id === id);
+
+          if (idx < 0) {
+            return current;
+          }
+
+          return [
+            ...current.slice(0, idx),
+            res.data.data,
+            ...current.slice(idx + 1)
+          ];
+        });
+      })
       .catch(err => redirectOnError());
   };
 
@@ -128,6 +148,34 @@ export const SnippetsContextProvider = (props: Props): JSX.Element => {
     }
   };
 
+  const duplicateSnippet = (id: number): void => {
+    const snippet =
+      snippets.find(item => item.id === id) ||
+      (currentSnippet?.id === id ? currentSnippet : null);
+
+    if (!snippet) {
+      return;
+    }
+
+    createSnippet({
+      title: `${snippet.title} copy`,
+      description: snippet.description,
+      language: snippet.language,
+      code: snippet.code,
+      docs: snippet.docs,
+      isPinned: false,
+      tags: snippet.tags || [],
+      collection: snippet.collection,
+      fileName: snippet.fileName,
+      isPublic: false
+    });
+  };
+
+  const renameCollection = async (from: string, to: string): Promise<void> => {
+    await axios.post('/api/snippets/collections/rename', { from, to });
+    getSnippets();
+  };
+
   const toggleSnippetPin = (id: number): void => {
     const snippet = snippets.find(s => s.id === id);
 
@@ -143,19 +191,39 @@ export const SnippetsContextProvider = (props: Props): JSX.Element => {
       .catch(err => redirectOnError());
   };
 
+  const clearSearch = (): void => {
+    setSearchResults([]);
+    setSearchActive(false);
+  };
+
   const searchSnippets = (query: SearchQuery): void => {
+    const isEmpty =
+      !query.query.trim() &&
+      !query.tags.length &&
+      !query.languages.length &&
+      !(query.collections && query.collections.length);
+
+    if (isEmpty) {
+      clearSearch();
+      return;
+    }
+
     axios
       .post<Response<Snippet[]>>('/api/snippets/search', query)
       .then(res => {
         setSearchResults(res.data.data);
-        console.log(res.data.data);
+        setSearchActive(true);
       })
-      .catch(err => console.log(err));
+      .catch(() => {
+        setSearchResults([]);
+        setSearchActive(true);
+      });
   };
 
   const context = {
     snippets,
     searchResults,
+    searchActive,
     currentSnippet,
     tagCount,
     getSnippets,
@@ -164,9 +232,12 @@ export const SnippetsContextProvider = (props: Props): JSX.Element => {
     createSnippet,
     updateSnippet,
     deleteSnippet,
+    duplicateSnippet,
+    renameCollection,
     toggleSnippetPin,
     countTags,
-    searchSnippets
+    searchSnippets,
+    clearSearch
   };
 
   return (

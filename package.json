@@ -1,21 +1,25 @@
 {
   "name": "snippycode",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Private self-hosted snippet manager with auth, raw links, GitHub sync, and PostgreSQL.",
   "main": "build/server.js",
   "scripts": {
     "init:client": "npm install --prefix=client",
     "init:server": "npm install",
     "init": "npm i && cd client && npm i",
-    "dev:client": "PORT=3000 npm start --prefix=client",
+    "dev:client": "DANGEROUSLY_DISABLE_HOST_CHECK=true HOST=0.0.0.0 PORT=3000 npm start --prefix=client",
     "dev:server": "NODE_ENV=development PORT=5000 nodemon",
     "dev": "npm-run-all -n --parallel dev:**",
     "build:client": "npm run build --prefix=client",
+    "build:public": "rm -rf public && mkdir -p public && cp -R client/build/. public/",
     "build:clear": "rm -rf build",
     "build:tsc": "tsc",
-    "build": "npm-run-all -n build:**",
+    "build": "npm-run-all -n build:clear build:tsc build:client build:public",
     "docker:build": "docker build -t snippycode .",
     "docker:up": "docker compose up -d --build"
+  },
+  "bin": {
+    "snippycode": "build/cli.js"
   },
   "keywords": [
     "snippets",

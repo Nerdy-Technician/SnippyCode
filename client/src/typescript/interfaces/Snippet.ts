@@ -10,6 +10,7 @@ export interface NewSnippet {
   tags: string[];
   collection?: string;
   fileName?: string;
+  isPublic?: boolean;
 }
 
 export interface Snippet extends Model, NewSnippet {

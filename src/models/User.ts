@@ -44,7 +44,7 @@ export const UserModel = sequelize.define<UserInstance>(
     role: {
       type: STRING,
       allowNull: false,
-      defaultValue: 'user'
+      defaultValue: 'editor'
     },
     mfaSecret: {
       type: STRING,

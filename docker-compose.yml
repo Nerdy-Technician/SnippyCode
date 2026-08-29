@@ -41,6 +41,8 @@ services:
       GITHUB_REPO_NAME: ${GITHUB_REPO_NAME:-}
       GITHUB_REPO_BRANCH: ${GITHUB_REPO_BRANCH:-main}
       GITHUB_SNIPPETS_PATH: ${GITHUB_SNIPPETS_PATH:-snippets}
+      SNIPPET_RUN_ENABLED: ${SNIPPET_RUN_ENABLED:-false}
+      SNIPPET_RUN_TIMEOUT_MS: ${SNIPPET_RUN_TIMEOUT_MS:-15000}
     volumes:
       - snippycode-data:/app/data
     ports:

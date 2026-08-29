@@ -1,6 +1,7 @@
 node_modules/
 build/
 client/build/
+public/
 data/*
 !data/**/*.json
 

@@ -36,7 +36,8 @@ export const validateSnippetBody = (
     tags,
     isPinned,
     collection,
-    fileName
+    fileName,
+    isPublic
   } = req.body;
 
   if (!isText(title) || !isText(language) || !isText(code)) {
@@ -71,6 +72,10 @@ export const validateSnippetBody = (
     return next(new ErrorResponse(400, 'Pin state must be true or false'));
   }
 
+  if (isPublic !== undefined && !isBooleanLike(isPublic)) {
+    return next(new ErrorResponse(400, 'Public state must be true or false'));
+  }
+
   req.body = {
     title: title.trim(),
     description: typeof description === 'string' ? description.trim() : '',
@@ -80,7 +85,8 @@ export const validateSnippetBody = (
     isPinned: Boolean(isPinned) ? 1 : 0,
     tags: Array.isArray(tags) ? tags : [],
     collection: typeof collection === 'string' && collection.trim() ? collection.trim() : 'General',
-    fileName: typeof fileName === 'string' ? fileName.trim() : ''
+    fileName: typeof fileName === 'string' ? fileName.trim() : '',
+    isPublic: Boolean(isPublic)
   };
 
   next();

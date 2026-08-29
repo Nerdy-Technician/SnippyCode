@@ -8,4 +8,5 @@ export interface Body {
   tags: string[];
   collection?: string;
   fileName?: string;
+  isPublic?: boolean;
 }

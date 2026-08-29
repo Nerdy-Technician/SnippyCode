@@ -39,10 +39,7 @@ export const Editor = (): JSX.Element => {
           <SnippetForm inEdit />
         </Fragment>
       ) : (
-        <Fragment>
-          <PageHeader title='Add new snippet' />
-          <SnippetForm />
-        </Fragment>
+        <SnippetForm />
       )}
     </Layout>
   );

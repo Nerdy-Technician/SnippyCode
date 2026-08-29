@@ -10,11 +10,13 @@
     },
     {
       "name": "Editor",
-      "dest": "/editor"
+      "dest": "/editor",
+      "minRole": "editor"
     },
     {
       "name": "Admin",
-      "dest": "/admin"
+      "dest": "/admin",
+      "minRole": "admin"
     }
   ]
 }

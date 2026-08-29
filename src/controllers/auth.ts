@@ -13,21 +13,76 @@ import {
   asyncWrapper,
   AuthenticatedRequest,
   clearSessionCookie,
+  effectiveRole,
   getUserFromSession,
   setSessionCookie,
   SESSION_COOKIE
 } from '../middleware';
 import { UserModel } from '../models';
-import { ErrorResponse, auditLog } from '../utils';
+import { ErrorResponse, auditLog, runnerPublicSettings, publicAiAssistStatus } from '../utils';
+import { getAiSettings } from '../utils/aiSettings';
 import {
   getOidcSettings,
   oidcIsReady,
+  persistOidcProvider,
+  persistOidcProviderName,
+  resolveOidcProviderName,
   setSetting
 } from '../utils/oidcSettings';
 
 const avatarDir = join(process.cwd(), 'data/uploads/avatars');
 const getSessionSecret = (): string =>
   process.env.SESSION_SECRET || 'dev-only-change-me';
+
+const oidcCookieOptions = {
+  httpOnly: true,
+  sameSite: 'lax' as const,
+  path: '/',
+  maxAge: 10 * 60 * 1000
+};
+
+const isSecureRequest = (req: Request): boolean =>
+  process.env.NODE_ENV === 'production' ||
+  req.secure ||
+  req.get('x-forwarded-proto') === 'https';
+
+const signOidcState = (nonce: string): string =>
+  jwt.sign({ purpose: 'oidc', nonce }, getSessionSecret(), { expiresIn: '10m' });
+
+const readOidcState = (
+  req: Request
+): { state: string; nonce: string } | null => {
+  const queryState = String(req.query.state || '').trim();
+
+  if (queryState) {
+    try {
+      const payload = jwt.verify(queryState, getSessionSecret()) as {
+        purpose?: string;
+        nonce?: string;
+      };
+
+      if (payload.purpose === 'oidc' && payload.nonce) {
+        return { state: queryState, nonce: payload.nonce };
+      }
+    } catch (err) {
+      // Fall back to the short-lived cookie from /oidc/start.
+    }
+  }
+
+  try {
+    const cookieState = JSON.parse(
+      req.cookies?.snippycode_oidc || req.cookies?.snippysafe_oidc || '{}'
+    ) as { state?: string; nonce?: string };
+
+    if (cookieState.state && cookieState.nonce) {
+      return { state: cookieState.state, nonce: cookieState.nonce };
+    }
+  } catch (err) {
+    return null;
+  }
+
+  return null;
+};
 
 const publicUser = (user: {
   id: number;
@@ -43,7 +98,7 @@ const publicUser = (user: {
   displayName: user.displayName,
   avatarUrl: `/api/auth/me/avatar?v=${user.updatedAt.getTime()}`,
   isOwner: user.isOwner,
-  role: user.isOwner ? 'owner' : user.role || 'user',
+  role: effectiveRole(user),
   mfaEnabled: Boolean(user.mfaEnabled)
 });
 
@@ -51,6 +106,7 @@ export const getAuthStatus = asyncWrapper(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const usersCount = await UserModel.count();
     const oidc = await getOidcSettings();
+    const ai = await getAiSettings();
     const sessionUser = await getUserFromSession(req.cookies?.[SESSION_COOKIE]).catch(
       () => null
     );
@@ -60,7 +116,10 @@ export const getAuthStatus = asyncWrapper(
         needsSetup: usersCount === 0,
         oidcEnabled: oidcIsReady(oidc),
         localLoginEnabled: oidc.localLoginEnabled,
-        user: sessionUser ? publicUser(sessionUser) : null
+        oidcProviderName: resolveOidcProviderName(oidc.providerName),
+        user: sessionUser ? publicUser(sessionUser) : null,
+        snippetRun: runnerPublicSettings(),
+        snippetAssist: publicAiAssistStatus(ai)
       }
     });
   }
@@ -75,6 +134,51 @@ export const setupOwner = asyncWrapper(
     }
 
     const { email, displayName, password, oidc } = req.body;
+    const oidcEnabled = Boolean(oidc?.enabled);
+
+    if (oidcEnabled) {
+      const issuerUrl = String(oidc.issuerUrl || '').trim();
+      const clientId = String(oidc.clientId || '').trim();
+      const clientSecret = String(oidc.clientSecret || '').trim();
+      const redirectUri = String(oidc.redirectUri || '').trim();
+
+      if (!issuerUrl || !clientId || !clientSecret || !redirectUri) {
+        return next(
+          new ErrorResponse(
+            400,
+            'Issuer URL, client ID, client secret, and redirect URI are required'
+          )
+        );
+      }
+
+      await setSetting('oidc', {
+        enabled: true,
+        issuerUrl,
+        clientId,
+        clientSecret,
+        redirectUri,
+        scopes: String(oidc.scopes || 'openid email profile').trim(),
+        subjectClaim: String(oidc.subjectClaim || 'sub').trim(),
+        emailClaim: String(oidc.emailClaim || 'email').trim(),
+        nameClaim: String(oidc.nameClaim || 'name').trim(),
+        matchMode: oidc.matchMode || 'subject_or_email',
+        allowSignup: true,
+        localLoginEnabled: false,
+        provider: persistOidcProvider(oidc.provider, undefined),
+        providerName: persistOidcProviderName(oidc.providerName, undefined)
+      });
+
+      await auditLog('auth.setup_oidc', {
+        target: 'oidc',
+        metadata: { issuerUrl }
+      });
+
+      res.status(201).json({
+        data: { pendingOidc: true }
+      });
+
+      return;
+    }
 
     if (!email || !displayName || !password || password.length < 10) {
       return next(
@@ -93,23 +197,6 @@ export const setupOwner = asyncWrapper(
       isOwner: true,
       role: 'owner'
     });
-
-    if (oidc?.enabled) {
-      await setSetting('oidc', {
-        enabled: true,
-        issuerUrl: String(oidc.issuerUrl || '').trim(),
-        clientId: String(oidc.clientId || '').trim(),
-        clientSecret: String(oidc.clientSecret || '').trim(),
-        redirectUri: String(oidc.redirectUri || '').trim(),
-        scopes: String(oidc.scopes || 'openid email profile').trim(),
-        subjectClaim: String(oidc.subjectClaim || 'sub').trim(),
-        emailClaim: String(oidc.emailClaim || 'email').trim(),
-        nameClaim: String(oidc.nameClaim || 'name').trim(),
-        matchMode: oidc.matchMode || 'subject_or_email',
-        allowSignup: Boolean(oidc.allowSignup),
-        localLoginEnabled: true
-      });
-    }
 
     setSessionCookie(res, user.id);
     await auditLog('auth.setup_owner', {
@@ -226,7 +313,7 @@ export const setupMfa = asyncWrapper(
     const secret = authenticator.generateSecret();
     const otpauth = authenticator.keyuri(
       user.email,
-      'SnippySafe',
+      'SnippyCode',
       secret
     );
     await user.update({ mfaSecret: secret, mfaEnabled: false });
@@ -363,14 +450,12 @@ export const oidcStart = asyncWrapper(
       redirect_uris: [settings.redirectUri],
       response_types: ['code']
     });
-    const state = generators.state();
     const nonce = generators.nonce();
+    const state = signOidcState(nonce);
 
-    res.cookie('snippysafe_oidc', JSON.stringify({ state, nonce }), {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
-      maxAge: 10 * 60 * 1000
+    res.cookie('snippycode_oidc', JSON.stringify({ state, nonce }), {
+      ...oidcCookieOptions,
+      secure: isSecureRequest(req)
     });
 
     res.redirect(
@@ -391,7 +476,17 @@ export const oidcCallback = asyncWrapper(
       return next(new ErrorResponse(404, 'OIDC login is not configured'));
     }
 
-    const cookieState = JSON.parse(req.cookies?.snippysafe_oidc || '{}');
+    const checks = readOidcState(req);
+
+    if (!checks) {
+      return next(
+        new ErrorResponse(
+          400,
+          'OIDC login expired or could not be verified. Close this tab and sign in again from SnippyCode.'
+        )
+      );
+    }
+
     const issuer = await Issuer.discover(settings.issuerUrl);
     const client = new issuer.Client({
       client_id: settings.clientId,
@@ -400,10 +495,21 @@ export const oidcCallback = asyncWrapper(
       response_types: ['code']
     });
     const params = client.callbackParams(req);
-    const tokenSet = await client.callback(settings.redirectUri, params, {
-      state: cookieState.state,
-      nonce: cookieState.nonce
-    });
+
+    let tokenSet;
+    try {
+      tokenSet = await client.callback(settings.redirectUri, params, {
+        state: checks.state,
+        nonce: checks.nonce
+      });
+    } catch (err) {
+      return next(
+        new ErrorResponse(
+          400,
+          'OIDC login could not be completed. Close this tab and sign in again from SnippyCode.'
+        )
+      );
+    }
     const claims = tokenSet.claims();
     const subject = String(claims[settings.subjectClaim] || '').trim();
     const email = String(claims[settings.emailClaim] || '').trim().toLowerCase();
@@ -427,23 +533,33 @@ export const oidcCallback = asyncWrapper(
 
     let user = await UserModel.findOne({ where });
 
-    if (!user && !settings.allowSignup) {
-      return next(
-        new ErrorResponse(
-          403,
-          'OIDC login succeeded, but no matching local account exists'
-        )
-      );
-    }
-
     if (!user) {
-      user = await UserModel.create({
-        email,
-        displayName,
-        oidcSubject: subject,
-        isOwner: false,
-        role: 'viewer'
-      });
+      const usersCount = await UserModel.count();
+
+      if (usersCount === 0) {
+        user = await UserModel.create({
+          email,
+          displayName,
+          oidcSubject: subject,
+          isOwner: true,
+          role: 'owner'
+        });
+      } else if (!settings.allowSignup) {
+        return next(
+          new ErrorResponse(
+            403,
+            'OIDC login succeeded, but no matching local account exists'
+          )
+        );
+      } else {
+        user = await UserModel.create({
+          email,
+          displayName,
+          oidcSubject: subject,
+          isOwner: false,
+          role: 'viewer'
+        });
+      }
     }
 
     if (!user.oidcSubject) {
@@ -456,7 +572,8 @@ export const oidcCallback = asyncWrapper(
       target: `user:${user.id}`,
       metadata: { email }
     });
-    res.clearCookie('snippysafe_oidc');
+    res.clearCookie('snippycode_oidc', { path: '/' });
+    res.clearCookie('snippysafe_oidc', { path: '/' });
     res.redirect('/');
   }
 );
