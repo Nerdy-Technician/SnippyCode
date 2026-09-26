@@ -41,6 +41,14 @@ app.disable('x-powered-by');
 app.set('trust proxy', 1);
 app.use(securityHeaders);
 app.use(express.json({ limit: '256kb', type: 'application/json' }));
+// Express 5 leaves req.body undefined when no body parser ran; keep the
+// Express 4 behaviour of an empty object so handlers can read fields safely.
+app.use((req, _res, next) => {
+  if (req.body === undefined) {
+    req.body = {};
+  }
+  next();
+});
 app.use(cookieParser());
 app.use(express.static(publicDir));
 app.use(express.static(clientBuildDir));

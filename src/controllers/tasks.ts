@@ -68,7 +68,7 @@ export const createTask = asyncWrapper(
 
 export const updateTask = asyncWrapper(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    const task = await TaskModel.findByPk(req.params.id);
+    const task = await TaskModel.findByPk(Number(req.params.id));
 
     if (!task) {
       return next(new ErrorResponse(404, 'Task was not found'));
@@ -91,7 +91,7 @@ export const updateTask = asyncWrapper(
 
 export const deleteTask = asyncWrapper(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    const task = await TaskModel.findByPk(req.params.id);
+    const task = await TaskModel.findByPk(Number(req.params.id));
 
     if (!task) {
       return next(new ErrorResponse(404, 'Task was not found'));

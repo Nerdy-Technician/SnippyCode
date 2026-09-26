@@ -500,7 +500,7 @@ export const runSnippet = asyncWrapper(
       );
     }
 
-    const snippet = await SnippetModel.findByPk(req.params.id);
+    const snippet = await SnippetModel.findByPk(Number(req.params.id));
 
     if (!snippet) {
       return next(new ErrorResponse(404, 'Snippet was not found'));
@@ -533,7 +533,7 @@ export const runSnippet = asyncWrapper(
 
 export const generateSnippetRawToken = asyncWrapper(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
-    const snippet = await SnippetModel.findByPk(req.params.id);
+    const snippet = await SnippetModel.findByPk(Number(req.params.id));
 
     if (!snippet) {
       return next(new ErrorResponse(404, 'Snippet was not found'));
@@ -565,7 +565,7 @@ export const generateSnippetRawToken = asyncWrapper(
 
 export const revokeSnippetRawToken = asyncWrapper(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
-    const snippet = await SnippetModel.findByPk(req.params.id);
+    const snippet = await SnippetModel.findByPk(Number(req.params.id));
 
     if (!snippet) {
       return next(new ErrorResponse(404, 'Snippet was not found'));
