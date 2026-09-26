@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build server + client
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            client/package-lock.json
+      - name: Install server dependencies
+        run: npm ci
+      - name: Install client dependencies
+        run: npm ci --prefix client
+      - name: Build (tsc + client)
+        run: npm run build
+
+  docker:
+    name: Dockerfile + compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Lint Dockerfile (errors only)
+        run: docker run --rm -i hadolint/hadolint:latest-alpine hadolint --failure-threshold error - < Dockerfile
+      - name: Validate docker-compose.yml
+        env:
+          SESSION_SECRET: ci-placeholder
+        run: docker compose -f docker-compose.yml config --quiet
