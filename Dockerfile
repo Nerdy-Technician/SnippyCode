@@ -1,16 +1,16 @@
-FROM node:22-alpine AS server-deps
+FROM node:26-alpine AS server-deps
 
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 
-FROM node:22-alpine AS client-deps
+FROM node:26-alpine AS client-deps
 
 WORKDIR /app/client
 COPY client/package*.json ./
 RUN npm ci --legacy-peer-deps
 
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 
 WORKDIR /app
 ENV NODE_OPTIONS=--openssl-legacy-provider
@@ -22,7 +22,7 @@ RUN npm run build:tsc \
   && mkdir -p public data \
   && cp -R client/build/. public/
 
-FROM node:22-alpine AS runtime
+FROM node:26-alpine AS runtime
 
 WORKDIR /app
 ENV NODE_ENV=production
