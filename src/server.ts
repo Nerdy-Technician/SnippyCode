@@ -22,7 +22,7 @@ const app = express();
 const logger = new Logger('server');
 const PORT = process.env.PORT || 5000;
 const publicDir = join(__dirname, '../public');
-const clientBuildDir = join(__dirname, '../client/build');
+const clientBuildDir = join(__dirname, '../client/dist');
 
 const resolveClientDir = (): string | null => {
   if (existsSync(join(publicDir, 'index.html'))) {
@@ -70,7 +70,7 @@ app.get(/^\/(?!api)/, (req: Request, res: Response) => {
   }
 
   res.status(404).json({
-    error: 'Client build not found. Run npm run build, or use the React dev server in development.'
+    error: 'Client build not found. Run npm run build, or use the Vite dev server in development.'
   });
 });
 

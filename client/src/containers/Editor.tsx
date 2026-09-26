@@ -4,17 +4,17 @@ import { SnippetForm } from '../components/Snippets/SnippetForm';
 import { Layout, PageHeader } from '../components/UI';
 import { SnippetsContext } from '../store';
 
-interface Params {
+type Params = {
   id?: string;
-}
+};
 
 export const Editor = (): JSX.Element => {
   const { setSnippet: setCurrentSnippet } = useContext(SnippetsContext);
   const [inEdit, setInEdit] = useState(false);
 
   // Get previous location
-  const location = useLocation<{ from: string }>();
-  const { from } = location.state || '/snippets';
+  const location = useLocation();
+  const { from } = (location.state as { from?: string } | null) || {};
 
   // Get id
   const { id } = useParams<Params>();

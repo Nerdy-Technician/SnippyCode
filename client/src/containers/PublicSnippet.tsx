@@ -6,9 +6,9 @@ import { SnippetDocs } from '../components/Snippets/SnippetDocs';
 import { Badge, Card, Layout } from '../components/UI';
 import { Response } from '../typescript/interfaces';
 
-interface Params {
+type Params = {
   rawRef: string;
-}
+};
 
 interface PublicSnippetData {
   id: number;
@@ -25,7 +25,7 @@ interface PublicSnippetData {
 }
 
 export const PublicSnippet = (): JSX.Element => {
-  const { rawRef } = useParams<Params>();
+  const { rawRef = '' } = useParams<Params>();
   const [snippet, setSnippet] = useState<PublicSnippetData | null>(null);
   const [error, setError] = useState('');
 

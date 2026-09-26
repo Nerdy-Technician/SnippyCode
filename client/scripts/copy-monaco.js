@@ -1,12 +1,14 @@
-const { cpSync, mkdirSync, existsSync } = require('fs');
-const { join } = require('path');
+import { cpSync, mkdirSync, existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const src = join(__dirname, '../node_modules/monaco-editor/min/vs');
-const dest = join(__dirname, '../public/monaco/vs');
+const here = dirname(fileURLToPath(import.meta.url));
+const src = join(here, '../node_modules/monaco-editor/min/vs');
+const dest = join(here, '../public/monaco/vs');
 
 if (!existsSync(src)) {
   throw new Error('monaco-editor is not installed');
 }
 
-mkdirSync(join(__dirname, '../public/monaco'), { recursive: true });
+mkdirSync(join(here, '../public/monaco'), { recursive: true });
 cpSync(src, dest, { recursive: true });

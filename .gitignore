@@ -1,6 +1,7 @@
 node_modules/
 build/
 client/build/
+client/dist/
 public/
 data/*
 !data/**/*.json

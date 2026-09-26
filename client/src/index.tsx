@@ -6,7 +6,7 @@ import { App } from './App';
 
 loader.config({
   paths: {
-    vs: `${process.env.PUBLIC_URL || ''}/monaco/vs`
+    vs: `${import.meta.env.BASE_URL}monaco/vs`
   }
 });
 

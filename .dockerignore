@@ -2,6 +2,8 @@ node_modules/
 build/
 client/node_modules/
 client/build/
+client/dist/
+client/public/monaco/
 data/
 .git/
 .github/img/

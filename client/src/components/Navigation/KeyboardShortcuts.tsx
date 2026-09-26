@@ -1,10 +1,10 @@
 import { useContext, useEffect } from 'react';
-import { useHistory } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { AuthContext } from '../../store';
 import { canEditSnippets } from '../../utils';
 
 export const KeyboardShortcuts = (): null => {
-  const history = useHistory();
+  const navigate = useNavigate();
   const { user } = useContext(AuthContext);
 
   useEffect(() => {
@@ -40,7 +40,7 @@ export const KeyboardShortcuts = (): null => {
           return;
         }
 
-        history.push('/snippets');
+        navigate('/snippets');
         window.setTimeout(focusSearch, 0);
       }
 
@@ -51,13 +51,13 @@ export const KeyboardShortcuts = (): null => {
         canEditSnippets(user?.role)
       ) {
         event.preventDefault();
-        history.push('/editor');
+        navigate('/editor');
       }
     };
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [history, user]);
+  }, [navigate, user]);
 
   return null;
 };

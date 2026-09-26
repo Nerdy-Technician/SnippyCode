@@ -27,10 +27,8 @@ export const SnippetCard = (props: Props): JSX.Element => {
       {/* TITLE */}
       <h5 className='card-title snippet-card-title'>
         <Link
-          to={{
-            pathname: `/snippet/${id}`,
-            state: { from: window.location.pathname }
-          }}
+          to={`/snippet/${id}`}
+          state={{ from: window.location.pathname }}
           onClick={() => setSnippet(id)}
         >
           {title}
@@ -62,10 +60,8 @@ export const SnippetCard = (props: Props): JSX.Element => {
         {/* ACTIONS */}
         <div className='d-flex justify-content-end flex-wrap gap-2'>
           <Link
-            to={{
-              pathname: `/snippet/${id}`,
-              state: { from: window.location.pathname }
-            }}
+            to={`/snippet/${id}`}
+            state={{ from: window.location.pathname }}
           >
             <Button
               text='View'

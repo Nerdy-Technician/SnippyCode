@@ -6,17 +6,17 @@ import { SnippetsContext } from '../store';
 import { SnippetDetails } from '../components/Snippets/SnippetDetails';
 import { SnippetDocs } from '../components/Snippets/SnippetDocs';
 
-interface Params {
+type Params = {
   id: string;
-}
+};
 
 export const Snippet = (): JSX.Element => {
   const { currentSnippet, getSnippetById } = useContext(SnippetsContext);
-  const { id } = useParams<Params>();
+  const { id = '' } = useParams<Params>();
 
   // Get previous location
-  const location = useLocation<{ from: string }>();
-  const { from } = location.state || '/snippets';
+  const location = useLocation();
+  const { from } = (location.state as { from?: string } | null) || {};
 
   useEffect(() => {
     getSnippetById(+id);
