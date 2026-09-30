@@ -23,6 +23,8 @@ export interface AuthStatus {
     enabled: boolean;
     providers: { id: 'openai' | 'anthropic'; label: string }[];
   };
+  /** PUBLIC_BASE_URL when configured on the server, otherwise empty. */
+  publicBaseUrl?: string;
 }
 
 export interface SetupPayload {

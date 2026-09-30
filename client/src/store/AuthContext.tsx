@@ -23,6 +23,7 @@ interface AuthContextValue {
     enabled: boolean;
     providers: { id: 'openai' | 'anthropic'; label: string }[];
   };
+  publicBaseUrl: string;
   refreshAuth: () => void;
   setup: (payload: SetupPayload) => Promise<void>;
   login: (email: string, password: string, mfaCode?: string, mfaToken?: string) => Promise<string | null>;
@@ -48,6 +49,7 @@ export const AuthContext = createContext<AuthContextValue>({
     enabled: false,
     providers: []
   },
+  publicBaseUrl: '',
   refreshAuth: () => {},
   setup: async () => {},
   login: async () => null,
@@ -79,6 +81,7 @@ export const AuthContextProvider = (props: Props): JSX.Element => {
     enabled: false,
     providers: [] as { id: 'openai' | 'anthropic'; label: string }[]
   });
+  const [publicBaseUrl, setPublicBaseUrl] = useState('');
 
   const applyStatus = (status: AuthStatus) => {
     setNeedsSetup(status.needsSetup);
@@ -99,6 +102,7 @@ export const AuthContextProvider = (props: Props): JSX.Element => {
         providers: []
       }
     );
+    setPublicBaseUrl(status.publicBaseUrl || '');
   };
 
   const refreshAuth = useCallback((): void => {
@@ -185,6 +189,7 @@ export const AuthContextProvider = (props: Props): JSX.Element => {
         user,
         snippetRun,
         snippetAssist,
+        publicBaseUrl,
         refreshAuth,
         setup,
         login,

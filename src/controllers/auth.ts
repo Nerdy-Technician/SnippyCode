@@ -19,7 +19,13 @@ import {
   SESSION_COOKIE
 } from '../middleware';
 import { UserModel } from '../models';
-import { ErrorResponse, auditLog, runnerPublicSettings, publicAiAssistStatus } from '../utils';
+import {
+  ErrorResponse,
+  auditLog,
+  runnerPublicSettings,
+  publicAiAssistStatus,
+  configuredPublicBaseUrl
+} from '../utils';
 import { getAiSettings } from '../utils/aiSettings';
 import {
   getOidcSettings,
@@ -119,7 +125,9 @@ export const getAuthStatus = asyncWrapper(
         oidcProviderName: resolveOidcProviderName(oidc.providerName),
         user: sessionUser ? publicUser(sessionUser) : null,
         snippetRun: runnerPublicSettings(),
-        snippetAssist: publicAiAssistStatus(ai)
+        snippetAssist: publicAiAssistStatus(ai),
+        // Only the configured value; the browser falls back to its own origin.
+        publicBaseUrl: configuredPublicBaseUrl()
       }
     });
   }

@@ -5,3 +5,4 @@ export * from './searchParser';
 export * from './rawTokenStorage';
 export * from './roles';
 export * from './auditLog';
+export * from './shareLinks';

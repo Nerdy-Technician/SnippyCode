@@ -76,18 +76,94 @@ export const validateSnippetBody = (
     return next(new ErrorResponse(400, 'Public state must be true or false'));
   }
 
-  req.body = {
+  // Only normalise fields the client actually sent. Omitted optional fields
+  // are left undefined so an update keeps the stored value instead of
+  // silently resetting it (for example, a stale client that leaves out
+  // isPublic must not unpublish a shared snippet). Create applies defaults.
+  const body: { [key: string]: unknown } = {
     title: title.trim(),
-    description: typeof description === 'string' ? description.trim() : '',
     language: language.trim().toLowerCase(),
-    code,
-    docs: typeof docs === 'string' ? docs : '',
-    isPinned: Boolean(isPinned) ? 1 : 0,
-    tags: Array.isArray(tags) ? tags : [],
-    collection: typeof collection === 'string' && collection.trim() ? collection.trim() : 'General',
-    fileName: typeof fileName === 'string' ? fileName.trim() : '',
-    isPublic: Boolean(isPublic)
+    code
   };
+
+  if (description !== undefined) {
+    body.description = typeof description === 'string' ? description.trim() : '';
+  }
+
+  if (docs !== undefined) {
+    body.docs = typeof docs === 'string' ? docs : '';
+  }
+
+  if (isPinned !== undefined) {
+    body.isPinned = isPinned ? 1 : 0;
+  }
+
+  if (tags !== undefined) {
+    body.tags = tags;
+  }
+
+  if (collection !== undefined) {
+    body.collection =
+      typeof collection === 'string' && collection.trim() ? collection.trim() : 'General';
+  }
+
+  if (fileName !== undefined) {
+    body.fileName = typeof fileName === 'string' ? fileName.trim() : '';
+  }
+
+  if (isPublic !== undefined) {
+    body.isPublic = Boolean(isPublic);
+  }
+
+  req.body = body;
+
+  next();
+};
+
+/**
+ * Validates PATCH /api/snippets/:id, which only changes the pin and public
+ * flags. Toggles use this instead of re-sending a whole (possibly stale)
+ * snippet through PUT.
+ */
+export const validateSnippetFlags = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void => {
+  const { isPinned, isPublic } = req.body || {};
+  const unknownKeys = Object.keys(req.body || {}).filter(
+    key => !['isPinned', 'isPublic'].includes(key)
+  );
+
+  if (unknownKeys.length > 0) {
+    return next(
+      new ErrorResponse(400, `Only isPinned and isPublic can be patched; got ${unknownKeys.join(', ')}`)
+    );
+  }
+
+  if (isPinned === undefined && isPublic === undefined) {
+    return next(new ErrorResponse(400, 'Send isPinned and/or isPublic'));
+  }
+
+  if (isPinned !== undefined && !isBooleanLike(isPinned)) {
+    return next(new ErrorResponse(400, 'Pin state must be true or false'));
+  }
+
+  if (isPublic !== undefined && !isBooleanLike(isPublic)) {
+    return next(new ErrorResponse(400, 'Public state must be true or false'));
+  }
+
+  const body: { isPinned?: number; isPublic?: boolean } = {};
+
+  if (isPinned !== undefined) {
+    body.isPinned = isPinned ? 1 : 0;
+  }
+
+  if (isPublic !== undefined) {
+    body.isPublic = Boolean(isPublic);
+  }
+
+  req.body = body;
 
   next();
 };

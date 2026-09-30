@@ -1256,6 +1256,17 @@ select {
   margin: 0.35rem 0 0.85rem;
 }
 
+.remote-execute code {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.remote-execute-warning {
+  color: var(--bs-warning, #ffc107);
+  font-size: 0.9rem;
+  margin: 0.35rem 0 0.85rem;
+}
+
 @media (max-width: 860px) {
   .version-modal-body {
     grid-template-columns: 1fr;
@@ -2365,6 +2376,22 @@ select {
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 0.5rem;
+
+  // Same brand sizing as the navbar; without it the logo renders at its
+  // natural size and pushes the shared snippet below the fold.
+  .navbar-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.65rem;
+    color: var(--sb-text);
+    font-weight: 700;
+
+    img {
+      width: 34px;
+      height: 34px;
+      object-fit: contain;
+    }
+  }
 }
 
 .run-output {

@@ -70,12 +70,20 @@ The development servers run separately:
 - Frontend: `http://localhost:3000`
 - API/server: `http://localhost:5000`
 
-Useful checks:
+Useful checks (the same ones CI runs):
 
 ```sh
-npm run build:tsc
-npm run build --prefix client
+npm run lint
+npm run typecheck
+npm test
+npm run build
 docker build -t snippycode:local .
+```
+
+`npm test` runs the server unit tests and the client tests. The HTTP share tests also need a throwaway PostgreSQL database whose name contains `test` (its `public` schema is dropped and re-created); without `TEST_DATABASE_URL` they are skipped:
+
+```sh
+TEST_DATABASE_URL=postgres://snippycode:snippycode@localhost:5432/snippycode_test npm test
 ```
 
 ## Docker Compose
@@ -137,6 +145,7 @@ Core environment variables:
 | `SNIPPYCODE_IMAGE` | No | Released image to run with Compose. |
 | `SNIPPET_RUN_ENABLED` | No | Set `true` to allow editors to run bash, Python, or Node snippets on the server. |
 | `SNIPPET_RUN_TIMEOUT_MS` | No | Runner timeout. Defaults to `15000`, max `60000`. |
+| `PUBLIC_BASE_URL` | No | Public URL used in share links and the PowerShell one-liner, for example `https://snippycode.example.com`. Defaults to the browser's origin. |
 
 Optional GitHub sync:
 
@@ -179,7 +188,19 @@ Tokens can be generated, copied, regenerated, and revoked from the snippet detai
 
 CI can also use an admin-managed raw API key as `?key=` or the `x-api-key` header. That key does not replace per-snippet tokens.
 
-Mark a snippet public to share a read-only page at `/s/:slug`. Public snippets also allow `/raw/:slug` without a token.
+Mark a snippet public to share a read-only page at `/s/:slug`. Public snippets also allow `/raw/:slug` without a token. Slugs keep the language extension, for example `/s/purge-onedrive-from-windows.powershell`.
+
+`/raw/:slug` returns only the snippet body as `text/plain; charset=utf-8` with `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`. It follows the same visibility as `/s/`: a private snippet without a valid token, or a missing one, is a `404`.
+
+### PowerShell remote execute
+
+Public PowerShell snippets show a copyable one-liner on the share dialog and on the `/s/` page:
+
+```powershell
+irm https://snippycode.example.com/raw/purge-onedrive-from-windows.powershell | iex
+```
+
+Only run scripts you trust; this runs the code directly on your machine. Anyone with the link can run the current version, so make the snippet private again to stop it.
 
 ## CLI
 

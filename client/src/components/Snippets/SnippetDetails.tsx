@@ -3,7 +3,20 @@ import { Link, useHistory } from 'react-router-dom';
 import axios from 'axios';
 import { AuthContext, SnippetsContext } from '../../store';
 import { Response, Snippet } from '../../typescript/interfaces';
-import { canEditSnippets, dateParser, readRawToken, removeRawToken, writeRawToken } from '../../utils';
+import {
+  buildPowerShellRemoteCommand,
+  buildRawUrl,
+  buildShareUrl,
+  canEditSnippets,
+  dateParser,
+  isPowerShellLanguage,
+  rawRefFor,
+  readRawToken,
+  removeRawToken,
+  resolveBaseUrl,
+  REMOTE_EXECUTE_WARNING,
+  writeRawToken
+} from '../../utils';
 import { Badge, Button, Card } from '../UI';
 import copy from 'clipboard-copy';
 import { SnippetPin } from './SnippetPin';
@@ -47,30 +60,28 @@ export const SnippetDetails = (props: Props): JSX.Element => {
   const [running, setRunning] = useState(false);
 
   const history = useHistory();
-  const { user, snippetRun } = useContext(AuthContext);
+  const { user, snippetRun, publicBaseUrl } = useContext(AuthContext);
   const canEdit = canEditSnippets(user?.role);
   const canRun =
     canEdit &&
     snippetRun.enabled &&
     snippetRun.languages.includes(language.toLowerCase());
 
-  const { deleteSnippet, duplicateSnippet, setSnippet, updateSnippet } =
+  const { deleteSnippet, duplicateSnippet, setSnippet, patchSnippetFlags } =
     useContext(SnippetsContext);
 
   const creationDate = dateParser(createdAt);
   const updateDate = dateParser(updatedAt);
-  const getRawUrl = (token = rawToken || 'YOUR_SNIPPET_RAW_TOKEN'): string => {
-    const { protocol, host } = window.location;
-    const rawRef = rawSlug || id;
-
-    return `${protocol}//${host}/raw/${rawRef}?key=${encodeURIComponent(
-      token
-    )}`;
-  };
-  const appUrl = `${window.location.protocol}//${window.location.host}/snippet/${id}`;
-  const publicUrl = `${window.location.protocol}//${window.location.host}/s/${rawSlug || id}`;
+  const baseUrl = resolveBaseUrl(publicBaseUrl);
+  const rawRef = rawRefFor({ id, rawSlug });
+  const getRawUrl = (token = rawToken || 'YOUR_SNIPPET_RAW_TOKEN'): string =>
+    `${buildRawUrl(baseUrl, rawRef)}?key=${encodeURIComponent(token)}`;
+  const appUrl = `${baseUrl}/snippet/${id}`;
+  const publicUrl = buildShareUrl(baseUrl, rawRef);
   const curlCommand = `curl -fsSL "${getRawUrl()}"`;
-  const publicRawUrl = `${window.location.protocol}//${window.location.host}/raw/${rawSlug || id}`;
+  const publicRawUrl = buildRawUrl(baseUrl, rawRef);
+  const isPowerShell = isPowerShellLanguage(language);
+  const powerShellCommand = buildPowerShellRemoteCommand(publicRawUrl);
 
   const togglePublic = () => {
     if (!canEdit) {
@@ -88,7 +99,7 @@ export const SnippetDetails = (props: Props): JSX.Element => {
       return;
     }
 
-    updateSnippet({ ...props.snippet, isPublic: nextPublic }, id, true);
+    patchSnippetFlags(id, { isPublic: nextPublic });
   };
 
   const runOnServer = async () => {
@@ -343,6 +354,26 @@ export const SnippetDetails = (props: Props): JSX.Element => {
                   Copy
                 </button>
               </div>
+            )}
+            {isPowerShell && isPublic && (
+              <>
+                <div className='raw-modal-row'>
+                  <span>PowerShell remote execute</span>
+                  <code>{powerShellCommand}</code>
+                  <button type='button' onClick={() => copy(powerShellCommand)}>
+                    Copy
+                  </button>
+                </div>
+                <p className='remote-execute-warning' role='note'>
+                  {REMOTE_EXECUTE_WARNING}
+                </p>
+              </>
+            )}
+            {isPowerShell && !isPublic && (
+              <p className='form-text'>
+                PowerShell remote execute (<code>irm … | iex</code>) is
+                available once this snippet is public.
+              </p>
             )}
             <div className='raw-modal-row'>
               <span>Raw URL</span>
