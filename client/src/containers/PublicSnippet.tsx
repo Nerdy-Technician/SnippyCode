@@ -10,6 +10,7 @@ import { AuthContext } from '../store';
 import {
   buildPowerShellRemoteCommand,
   buildRawUrl,
+  dateParser,
   isPowerShellLanguage,
   rawRefFor,
   resolveBaseUrl,
@@ -31,7 +32,7 @@ interface PublicSnippetData {
   fileName?: string | null;
   rawSlug?: string | null;
   tags: string[];
-  updatedAt: string;
+  updatedAt: Date;
 }
 
 export const PublicSnippet = (): JSX.Element => {
@@ -88,23 +89,38 @@ export const PublicSnippet = (): JSX.Element => {
         <div className='col-12'>Loading...</div>
       ) : (
         <>
-          <div className='col-12 col-md-7 col-lg-8'>
-            <Card>
+          {/*
+            Every column holds a single card: .app-card is height: 100% so
+            cards in a row line up. Putting the code panel in the same column
+            as a card made the card grow to the whole column (card + code),
+            leaving screens of empty panels above the code.
+          */}
+          <div className='col-12 col-lg-8'>
+            <Card classes='public-snippet-summary'>
               <p className='eyebrow'>{snippet.collection || 'General'}</p>
               <h2>{snippet.title}</h2>
               <p className='snippet-description'>
                 {snippet.description || 'No description'}
               </p>
-              <Badge text={snippet.language} color='light' />
+              <div className='public-snippet-tags'>
+                {[snippet.language, ...snippet.tags]
+                  .filter(
+                    (tag, idx, all) =>
+                      all.findIndex(t => t.toLowerCase() === tag.toLowerCase()) === idx
+                  )
+                  .map(tag => (
+                    <Badge key={tag} text={tag} color='light' />
+                  ))}
+              </div>
+              <p className='form-text mb-0 mt-3'>
+                Updated {dateParser(snippet.updatedAt).relative}
+              </p>
             </Card>
-            <div className='mt-3'>
-              <SnippetCode code={snippet.code} language={snippet.language} />
-            </div>
           </div>
-          <div className='col-12 col-md-5 col-lg-4'>
-            <Card>
+          <div className='col-12 col-lg-4'>
+            <Card classes='public-snippet-actions'>
               <h5 className='card-title'>Raw link</h5>
-              <p className='form-text'>
+              <p className='form-text d-none d-sm-block'>
                 Public snippets can be fetched without a token.
               </p>
               <code>{rawUrl}</code>
@@ -136,6 +152,9 @@ export const PublicSnippet = (): JSX.Element => {
                 </div>
               )}
             </Card>
+          </div>
+          <div className='col-12 public-snippet-code'>
+            <SnippetCode code={snippet.code} language={snippet.language} />
           </div>
           {snippet.docs && (
             <div className='col-12'>

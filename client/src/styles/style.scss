@@ -2428,3 +2428,24 @@ select {
     }
   }
 }
+
+// Public /s/ page: summary and actions cards share a row, the code panel
+// gets its own full-width row (see PublicSnippet.tsx).
+.public-snippet-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+// Keep the title, actions and the start of the code above the fold on
+// phones.
+@media (max-width: 575.98px) {
+  .public-snippet-page {
+    --bs-gutter-y: 0.75rem;
+    padding-top: 0.75rem !important;
+
+    .app-card .card-body {
+      padding: 1rem;
+    }
+  }
+}
