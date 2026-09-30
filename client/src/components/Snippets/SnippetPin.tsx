@@ -22,7 +22,7 @@ export const SnippetPin = (props: Props): JSX.Element | null => {
   }
 
   return (
-    <div onClick={() => toggleSnippetPin(id)} className='cursor-pointer'>
+    <div onClick={() => toggleSnippetPin(id, !isPinned)} className='cursor-pointer'>
       {isPinned ? (
         <Icon path={mdiPin} size={0.8} color='#20c997' />
       ) : (

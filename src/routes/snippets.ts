@@ -10,6 +10,7 @@ import {
   getSnippet,
   getSnippetRunner,
   getSnippetVersions,
+  patchSnippetFlags,
   restoreSnippetVersion,
   revokeSnippetRawToken,
   renameCollection,
@@ -24,6 +25,7 @@ import {
   requireBody,
   requireMinimumRole,
   validateSnippetBody,
+  validateSnippetFlags,
   validateSnippetId
 } from '../middleware';
 
@@ -62,6 +64,13 @@ snippetRouter
     requireMinimumRole('editor'),
     validateSnippetBody,
     updateSnippet
+  )
+  .patch(
+    requireAuth,
+    validateSnippetId,
+    requireMinimumRole('editor'),
+    validateSnippetFlags,
+    patchSnippetFlags
   )
   .delete(requireAuth, validateSnippetId, requireMinimumRole('editor'), deleteSnippet);
 

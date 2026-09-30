@@ -3,7 +3,15 @@ import { BrowserRouter, Redirect, Route, Switch, useParams } from 'react-router-
 import { AuthGate } from './components/Auth';
 import { KeyboardShortcuts } from './components/Navigation/KeyboardShortcuts';
 import { Navbar } from './components/Navigation/Navbar';
-import { Admin, Editor, Home, PublicSnippet, Snippet, Snippets } from './containers';
+import {
+  About,
+  Admin,
+  Editor,
+  Home,
+  PublicSnippet,
+  Snippet,
+  Snippets
+} from './containers';
 import {
   AuthContext,
   AuthContextProvider,
@@ -56,6 +64,7 @@ export const App = () => {
         <AuthContextProvider>
           <Switch>
             <Route path='/s/:rawRef' component={PublicSnippet} />
+            <Route exact path='/about' component={About} />
             <Route path='/' component={PrivateApp} />
           </Switch>
         </AuthContextProvider>

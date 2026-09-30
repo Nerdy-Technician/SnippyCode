@@ -21,10 +21,11 @@ export const SnippetsContext = createContext<Context>({
   setSnippet: (id: number) => {},
   createSnippet: (snippet: NewSnippet) => {},
   updateSnippet: (snippet: NewSnippet, id: number, isLocal?: boolean) => {},
+  patchSnippetFlags: () => {},
   deleteSnippet: (id: number) => {},
   duplicateSnippet: (id: number) => {},
   renameCollection: async () => {},
-  toggleSnippetPin: (id: number) => {},
+  toggleSnippetPin: (id: number, isPinned?: boolean) => {},
   countTags: () => {},
   searchSnippets: (query: SearchQuery) => {},
   clearSearch: () => {}
@@ -105,6 +106,40 @@ export const SnippetsContextProvider = (props: Props): JSX.Element => {
       .catch(err => redirectOnError());
   };
 
+  // Merge a fresh server copy into the list without relying on a possibly
+  // stale closure, and without duplicating entries when it is not listed yet.
+  const replaceSnippet = (updated: Snippet): void => {
+    setSnippets(current => {
+      const idx = current.findIndex(s => s.id === updated.id);
+
+      if (idx < 0) {
+        return [...current, updated];
+      }
+
+      return [...current.slice(0, idx), updated, ...current.slice(idx + 1)];
+    });
+  };
+
+  /**
+   * Change only the pin and/or public flags. The server patches just these
+   * fields, so a stale copy of the snippet can never overwrite others (for
+   * example, pinning must not unpublish a shared snippet).
+   */
+  const patchSnippetFlags = (
+    id: number,
+    flags: { isPinned?: boolean; isPublic?: boolean }
+  ): void => {
+    axios
+      .patch<Response<Snippet>>(`/api/snippets/${id}`, flags)
+      .then(res => {
+        replaceSnippet(res.data.data);
+        setCurrentSnippet(current =>
+          current && current.id === id ? res.data.data : current
+        );
+      })
+      .catch(err => redirectOnError());
+  };
+
   const updateSnippet = (
     snippet: NewSnippet,
     id: number,
@@ -113,12 +148,7 @@ export const SnippetsContextProvider = (props: Props): JSX.Element => {
     axios
       .put<Response<Snippet>>(`/api/snippets/${id}`, snippet)
       .then(res => {
-        const oldSnippetIdx = snippets.findIndex(s => s.id === id);
-        setSnippets([
-          ...snippets.slice(0, oldSnippetIdx),
-          res.data.data,
-          ...snippets.slice(oldSnippetIdx + 1)
-        ]);
+        replaceSnippet(res.data.data);
         setCurrentSnippet(res.data.data);
 
         if (!isLocal) {
@@ -176,12 +206,13 @@ export const SnippetsContextProvider = (props: Props): JSX.Element => {
     getSnippets();
   };
 
-  const toggleSnippetPin = (id: number): void => {
-    const snippet = snippets.find(s => s.id === id);
+  const toggleSnippetPin = (id: number, isPinned?: boolean): void => {
+    const snippet =
+      snippets.find(s => s.id === id) ||
+      (currentSnippet?.id === id ? currentSnippet : null);
+    const nextPinned = isPinned ?? !snippet?.isPinned;
 
-    if (snippet) {
-      updateSnippet({ ...snippet, isPinned: !snippet.isPinned }, id, true);
-    }
+    patchSnippetFlags(id, { isPinned: nextPinned });
   };
 
   const countTags = (): void => {
@@ -231,6 +262,7 @@ export const SnippetsContextProvider = (props: Props): JSX.Element => {
     setSnippet,
     createSnippet,
     updateSnippet,
+    patchSnippetFlags,
     deleteSnippet,
     duplicateSnippet,
     renameCollection,

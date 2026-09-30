@@ -13,12 +13,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build server + client
+  checks:
+    name: Lint, typecheck, test, build
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: snippycode
+          POSTGRES_PASSWORD: snippycode
+          POSTGRES_DB: snippycode_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U snippycode -d snippycode_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Throwaway database for the HTTP share tests (test/shareRoutes.test.ts).
+      TEST_DATABASE_URL: postgres://snippycode:snippycode@localhost:5432/snippycode_test
     steps:
       - uses: actions/checkout@v7
+
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -26,22 +44,47 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             client/package-lock.json
+
       - name: Install server dependencies
         run: npm ci
+
       - name: Install client dependencies
         run: npm ci --prefix client
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
       - name: Build (tsc + client)
         run: npm run build
 
   docker:
-    name: Dockerfile + compose
+    name: Docker image build
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+
       - name: Lint Dockerfile (errors only)
         run: docker run --rm -i hadolint/hadolint:latest-alpine hadolint --failure-threshold error - < Dockerfile
+
       - name: Validate docker-compose.yml
         env:
           SESSION_SECRET: ci-placeholder
         run: docker compose -f docker-compose.yml config --quiet
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          tags: snippycode:ci
+          cache-from: type=gha,scope=ci
+          cache-to: type=gha,mode=max,scope=ci
