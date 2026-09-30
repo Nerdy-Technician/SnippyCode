@@ -1,8 +1,13 @@
-# SnippyCode v1.2.0 Release Notes
+# SnippyCode v1.2.1 Release Notes
 
-Release version: `v1.2.0`
+Release version: `v1.2.1`
 
 ## Highlights
+
+- Fixed: public `/s/` pages started with several screens of empty panels, with the code far down the page in a narrow column. The title card sat in the same column as the code, and cards are full height, so the card grew to the height of the code. The page now puts the title and actions cards side by side and the code in its own full-width row. The title, raw link, PowerShell one-liner and the start of the code fit on the first screen on desktop and on phones.
+- Public pages also show the snippet's tags and when it was last updated.
+
+## Included from v1.2.0
 
 - Fixed: shared links (`/s/:slug`) stopped working after an unrelated change. Pinning a snippet from a library view that was loaded before the snippet was made public, or any update that did not resend the public flag (another tab, a script, the API), silently turned the snippet private again. Pin and public toggles now change only that flag, and updates keep fields they do not send.
 - Fixed: the pin on a snippet page did nothing after a page reload.
@@ -33,6 +38,7 @@ Supported platforms:
 
 ## Upgrade Notes
 
+- v1.2.1: no database migration or configuration change.
 - No database migration.
 - `/raw/:slug` now answers `404` instead of `401` when a private snippet is requested without a valid token, so private snippets look the same as missing ones. Valid snippet tokens and the admin raw API key work as before.
 - Snippets that were unpublished by the bug stay private. Make them public again from the snippet page.
