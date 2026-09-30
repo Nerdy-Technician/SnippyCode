@@ -1,5 +1,5 @@
 import { useEffect, useContext, useMemo, Fragment } from 'react';
-import { useHistory, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { AuthContext, SnippetsContext } from '../store';
 import { SnippetGrid } from '../components/Snippets/SnippetGrid';
 import { Button, Card, EmptyState, Layout } from '../components/UI';
@@ -45,7 +45,7 @@ export const Snippets = (): JSX.Element => {
   } = useContext(SnippetsContext);
   const { user } = useContext(AuthContext);
   const canEdit = canEditSnippets(user?.role);
-  const history = useHistory();
+  const navigate = useNavigate();
   const location = useLocation();
   const params = new URLSearchParams(location.search);
   const collectionFilter = params.get('collection');
@@ -96,10 +96,13 @@ export const Snippets = (): JSX.Element => {
     }
 
     const search = query.toString();
-    history.replace({
-      pathname: '/snippets',
-      search: search ? `?${search}` : ''
-    });
+    navigate(
+      {
+        pathname: '/snippets',
+        search: search ? `?${search}` : ''
+      },
+      { replace: true }
+    );
   };
 
   const collections = useMemo(() => {

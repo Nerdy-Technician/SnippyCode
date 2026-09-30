@@ -1,5 +1,5 @@
 import { useContext, useState } from 'react';
-import { Link, useHistory } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { AuthContext, SnippetsContext } from '../../store';
 import { Response, Snippet } from '../../typescript/interfaces';
@@ -46,7 +46,7 @@ export const SnippetDetails = (props: Props): JSX.Element => {
   const [runError, setRunError] = useState('');
   const [running, setRunning] = useState(false);
 
-  const history = useHistory();
+  const navigate = useNavigate();
   const { user, snippetRun } = useContext(AuthContext);
   const canEdit = canEditSnippets(user?.role);
   const canRun =
@@ -223,10 +223,7 @@ export const SnippetDetails = (props: Props): JSX.Element => {
             outline
             handler={() => {
               setSnippet(id);
-              history.push({
-                pathname: `/editor/${id}`,
-                state: { from: window.location.pathname }
-              });
+              navigate(`/editor/${id}`, { state: { from: window.location.pathname } });
             }}
           />
         )}

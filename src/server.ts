@@ -22,7 +22,7 @@ const app = express();
 const logger = new Logger('server');
 const PORT = process.env.PORT || 5000;
 const publicDir = join(__dirname, '../public');
-const clientBuildDir = join(__dirname, '../client/build');
+const clientBuildDir = join(__dirname, '../client/dist');
 
 const resolveClientDir = (): string | null => {
   if (existsSync(join(publicDir, 'index.html'))) {
@@ -41,6 +41,14 @@ app.disable('x-powered-by');
 app.set('trust proxy', 1);
 app.use(securityHeaders);
 app.use(express.json({ limit: '256kb', type: 'application/json' }));
+// Express 5 leaves req.body undefined when no body parser ran; keep the
+// Express 4 behaviour of an empty object so handlers can read fields safely.
+app.use((req, _res, next) => {
+  if (req.body === undefined) {
+    req.body = {};
+  }
+  next();
+});
 app.use(cookieParser());
 app.use(express.static(publicDir));
 app.use(express.static(clientBuildDir));
@@ -62,7 +70,7 @@ app.get(/^\/(?!api)/, (req: Request, res: Response) => {
   }
 
   res.status(404).json({
-    error: 'Client build not found. Run npm run build, or use the React dev server in development.'
+    error: 'Client build not found. Run npm run build, or use the Vite dev server in development.'
   });
 });
 

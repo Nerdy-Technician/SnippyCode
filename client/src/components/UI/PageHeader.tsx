@@ -16,10 +16,8 @@ export const PageHeader = <T,>(props: Props<T>): JSX.Element => {
       {prevDest && (
         <div>
           <Link
-            to={{
-              pathname: prevDest,
-              state: prevState
-            }}
+            to={prevDest}
+            state={prevState}
             className='back-link'
           >
             Back

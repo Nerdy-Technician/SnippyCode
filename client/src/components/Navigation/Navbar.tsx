@@ -15,7 +15,7 @@ export const Navbar = (): JSX.Element => {
     <>
       <nav className='navbar navbar-expand app-navbar'>
         <div className='container-lg'>
-          <NavLink exact to='/' className='navbar-brand'>
+          <NavLink end to='/' className='navbar-brand'>
             <img src='/CodeSnippy.png' alt='' />
             <span>SnippyCode</span>
           </NavLink>
@@ -27,7 +27,7 @@ export const Navbar = (): JSX.Element => {
               )
               .map(({ name, dest }, idx) => (
               <li className='nav-item' key={idx}>
-                <NavLink exact to={dest} className='nav-link'>
+                <NavLink end to={dest} className='nav-link'>
                   {name}
                 </NavLink>
               </li>

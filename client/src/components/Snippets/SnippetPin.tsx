@@ -1,7 +1,7 @@
 import { useContext } from 'react';
 import { AuthContext, SnippetsContext } from '../../store';
 import { canEditSnippets } from '../../utils';
-import Icon from '@mdi/react';
+import { Icon } from '@mdi/react';
 import { mdiPin, mdiPinOutline } from '@mdi/js';
 
 interface Props {

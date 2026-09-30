@@ -67,7 +67,7 @@ npm run dev
 
 The development servers run separately:
 
-- Frontend: `http://localhost:3000`
+- Frontend (Vite dev server, proxies `/api` and `/raw` to the API): `http://localhost:3000`
 - API/server: `http://localhost:5000`
 
 Useful checks:
@@ -108,9 +108,9 @@ Backups are written to the `postgres-backups` Docker volume.
 
 ## Reverse proxy
 
-Point TLS (Caddy, nginx, Traefik) at the SnippyCode container, port 5000. Do not proxy to the React dev server on 3000; that process replies with `Invalid Host header`.
+Point TLS (Caddy, nginx, Traefik) at the SnippyCode container, port 5000. Do not proxy to the Vite dev server on 3000; it is for local development only.
 
-Build the client into `public/` before serving on 5000:
+Build the client (Vite outputs to `client/dist`, which is copied into `public/`) before serving on 5000:
 
 ```sh
 npm run build

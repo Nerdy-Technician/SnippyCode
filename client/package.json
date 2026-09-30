@@ -2,6 +2,15 @@
   "name": "snippycode-client",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
+  "scripts": {
+    "predev": "node scripts/copy-monaco.js",
+    "dev": "vite",
+    "start": "npm run dev",
+    "prebuild": "node scripts/copy-monaco.js",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
   "dependencies": {
     "@fortawesome/fontawesome-svg-core": "^7.3.1",
     "@fortawesome/free-solid-svg-icons": "^7.3.1",
@@ -9,56 +18,24 @@
     "@mdi/js": "^6.1.95",
     "@mdi/react": "^1.5.0",
     "@monaco-editor/react": "^4.4.6",
-    "@types/node": "^18.19.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "@types/react-router-dom": "^5.3.0",
-    "assert": "^2.1.0",
-    "axios": "^0.21.4",
+    "axios": "^1.20.0",
     "bootstrap": "^5.1.1",
-    "buffer": "^6.0.3",
     "clipboard-copy": "^4.0.1",
     "dayjs": "^1.10.7",
     "highlight.js": "^11.2.0",
     "monaco-editor": "0.44.0",
-    "process": "^0.11.10",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^7.0.1",
-    "react-router-dom": "^5.3.0",
-    "react-scripts": "5.0.1",
-    "sass": "^1.69.5",
-    "typescript": "^4.9.5"
+    "react-router-dom": "^7.18.4",
+    "sass": "^1.69.5"
   },
-  "scripts": {
-    "prestart": "node scripts/copy-monaco.js",
-    "start": "DANGEROUSLY_DISABLE_HOST_CHECK=true NODE_OPTIONS=--openssl-legacy-provider react-app-rewired start",
-    "prebuild": "node scripts/copy-monaco.js",
-    "build": "DISABLE_ESLINT_PLUGIN=true CI=false NODE_OPTIONS=--openssl-legacy-provider react-app-rewired build",
-    "test": "react-app-rewired test",
-    "eject": "react-scripts eject"
-  },
-  "eslintConfig": {
-    "extends": [
-      "react-app",
-      "react-app/jest"
-    ]
-  },
-  "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
-  },
-  "proxy": "http://localhost:5000",
   "devDependencies": {
-    "purgecss": "^4.0.3",
-    "react-app-rewired": "^2.2.1"
+    "@types/node": "^24.19.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.1"
   }
 }

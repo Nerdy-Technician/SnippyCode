@@ -11,7 +11,7 @@ import Editor from '@monaco-editor/react';
 import type { OnMount } from '@monaco-editor/react';
 import copy from 'clipboard-copy';
 import axios from 'axios';
-import { useHistory } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { AuthContext, SnippetsContext, ThemeContext } from '../../store';
 import { NewSnippet, Response } from '../../typescript/interfaces';
 import { readRawToken } from '../../utils';
@@ -174,7 +174,7 @@ export const SnippetForm = (props: Props): JSX.Element => {
   const { snippetAssist, refreshAuth } = useContext(AuthContext);
   const assistReady =
     snippetAssist.enabled || snippetAssist.providers.length > 0;
-  const history = useHistory();
+  const navigate = useNavigate();
   const editorRef = useRef<EditorInstance | null>(null);
   const [languageWasManual, setLanguageWasManual] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -433,7 +433,7 @@ export const SnippetForm = (props: Props): JSX.Element => {
     { label: 'Use detected language', action: useDetectedLanguageHandler },
     { label: 'Cycle theme', action: cycleTheme },
     { label: 'Clear editor', action: clearCodeHandler },
-    { label: 'Search library', action: () => history.push('/snippets') },
+    { label: 'Search library', action: () => navigate('/snippets') },
     ...(assistReady
       ? [
           { label: 'Generate code', action: () => runAssist(['code']) },
@@ -447,7 +447,7 @@ export const SnippetForm = (props: Props): JSX.Element => {
           { label: 'Copy raw URL', action: copyRawUrlCommand },
           {
             label: 'Open version history',
-            action: () => history.push(`/snippet/${currentSnippet.id}`)
+            action: () => navigate(`/snippet/${currentSnippet.id}`)
           }
         ]
       : [])
