@@ -1,6 +1,6 @@
 {
   "name": "snippycode",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Private self-hosted snippet manager with auth, raw links, GitHub sync, and PostgreSQL.",
   "main": "build/server.js",
   "scripts": {
