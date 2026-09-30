@@ -66,9 +66,14 @@ export const PublicSnippet = (): JSX.Element => {
             <img src='/CodeSnippy.png' alt='' />
             <span>SnippyCode</span>
           </Link>
-          <Link to='/' className='btn btn-outline-secondary'>
-            Sign in
-          </Link>
+          <div className='public-snippet-header-links'>
+            <Link to='/about' className='btn btn-link'>
+              About
+            </Link>
+            <Link to='/' className='btn btn-outline-secondary'>
+              Sign in
+            </Link>
+          </div>
         </header>
       </div>
       {error ? (

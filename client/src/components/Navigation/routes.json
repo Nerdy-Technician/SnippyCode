@@ -17,6 +17,10 @@
       "name": "Admin",
       "dest": "/admin",
       "minRole": "admin"
+    },
+    {
+      "name": "About",
+      "dest": "/about"
     }
   ]
 }

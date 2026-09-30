@@ -4,3 +4,4 @@ export * from './Snippets';
 export * from './Editor';
 export * from './Admin';
 export * from './PublicSnippet';
+export * from './About';

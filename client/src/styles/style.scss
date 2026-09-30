@@ -2405,3 +2405,26 @@ select {
   padding: 0.75rem;
   white-space: pre-wrap;
 }
+
+.public-snippet-header-links {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.about-page {
+  .about-version {
+    color: var(--sb-muted, inherit);
+    margin-bottom: 0;
+  }
+
+  .about-features,
+  .about-links {
+    margin: 0;
+    padding-left: 1.1rem;
+
+    li + li {
+      margin-top: 0.5rem;
+    }
+  }
+}
