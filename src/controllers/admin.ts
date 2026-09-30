@@ -1124,7 +1124,7 @@ export const exportLibraryJson = asyncWrapper(
       metadata: { count: data.length }
     });
 
-    res.setHeader('Content-Disposition', 'attachment; filename=\"snippycode-export.json\"');
+    res.setHeader('Content-Disposition', 'attachment; filename="snippycode-export.json"');
     res.status(200).json({
       exportedAt: new Date().toISOString(),
       snippets: data

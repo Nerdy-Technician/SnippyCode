@@ -34,7 +34,7 @@ export interface AiPendingAuth {
 
 const emptyPending = (): AiPendingAuth => ({});
 
-let pendingAuth: AiPendingAuth = emptyPending();
+const pendingAuth: AiPendingAuth = emptyPending();
 
 const base64Url = (buffer: Buffer): string =>
   buffer

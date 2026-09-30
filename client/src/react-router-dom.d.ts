@@ -1,39 +1,39 @@
-import 'react';
+import type { ReactNode } from 'react';
 
 declare module 'react-router-dom' {
   interface BrowserRouterProps {
-    children?: React.ReactNode;
+    children?: ReactNode;
   }
 
   interface MemoryRouterProps {
-    children?: React.ReactNode;
+    children?: ReactNode;
   }
 
   interface HashRouterProps {
-    children?: React.ReactNode;
+    children?: ReactNode;
   }
 
   interface RouterProps {
-    children?: React.ReactNode;
+    children?: ReactNode;
   }
 
   interface SwitchProps {
-    children?: React.ReactNode;
+    children?: ReactNode;
   }
 
   interface RouteProps {
-    children?: React.ReactNode;
+    children?: ReactNode;
   }
 
   interface RedirectProps {
-    children?: React.ReactNode;
+    children?: ReactNode;
   }
 
   interface LinkProps {
-    children?: React.ReactNode;
+    children?: ReactNode;
   }
 
   interface NavLinkProps {
-    children?: React.ReactNode;
+    children?: ReactNode;
   }
 }
