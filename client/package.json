@@ -60,7 +60,7 @@
   "proxy": "http://localhost:5000",
   "devDependencies": {
     "@types/jest": "^30.0.0",
-    "purgecss": "^4.0.3",
+    "purgecss": "^8.0.0",
     "react-app-rewired": "^2.2.1"
   }
 }
