@@ -43,7 +43,12 @@ COPY --from=build /app/public ./public
 COPY agent ./agent
 # In-app help pages and the example runbook
 COPY docs ./docs
-RUN mkdir -p data/backups
+# Run as the image's unprivileged `node` user (uid 1000). It owns only the
+# data dir (database-independent files and backups); the app itself is
+# read-only to it. Existing root-owned volumes need a one-off chown, see
+# docs/upgrading-v1.2.3.md.
+RUN mkdir -p data/backups && chown -R node:node data
+USER node
 
 EXPOSE 5000
 

@@ -14,6 +14,7 @@ export * from './aiOAuth';
 export * from './snippetBoxImport';
 export * from './shareLinks';
 export * from './templateVars';
+export * from './placeholderContext';
 export * from './snippetUsage';
 export * from './secretBox';
 export * from './siteAccess';

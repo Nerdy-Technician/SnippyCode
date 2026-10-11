@@ -61,7 +61,7 @@ describe('agents, schedules, notifications and backups', { skip }, () => {
       }
 
       if (options.auth !== false && cookie) {
-        headers.cookie = cookie;
+        { headers.cookie = `${cookie}; XSRF-TOKEN=test-xsrf`; headers['x-xsrf-token'] = 'test-xsrf'; }
       }
 
       const req = http.request({ host: '127.0.0.1', port, method, path, headers }, res => {
@@ -200,7 +200,7 @@ describe('agents, schedules, notifications and backups', { skip }, () => {
         }),
         201
       );
-    passing = await snippet('Disk check', 'echo "disk ok for {{TOKEN}}"\n');
+    passing = await snippet('Disk check', 'echo disk ok for {{TOKEN}}\n');
     failing = await snippet('Broken check', 'echo "about to fail" >&2\nexit 3\n');
 
     await ok(
@@ -294,7 +294,7 @@ describe('agents, schedules, notifications and backups', { skip }, () => {
     assert.equal(job.status, 200);
     assert.equal(job.headers['x-job-language'], 'bash');
     // Quoted for bash inside the author's double quotes: the shell prints the quotes
-    assert.equal(job.text, `echo "disk ok for '${SECRET}'"\n`);
+    assert.equal(job.text, `echo disk ok for '${SECRET}'\n`);
 
     const [stored] = await db.sequelize.query(`SELECT payload FROM agent_jobs WHERE id = :id`, {
       type: 'SELECT',

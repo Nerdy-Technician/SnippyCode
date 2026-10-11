@@ -60,6 +60,9 @@ import {
   approvalJson,
   isAdminRole,
   rawNames,
+  quotedPlaceholders,
+  quotedPlaceholderMessage,
+  scanQuotedPlaceholders,
   approvalReasons,
   assertApprovalFresh,
   contentHash,
@@ -85,8 +88,27 @@ const publicSnippet = (rawSnippet: any, tags?: string[]) => ({
   rawTokenPrefix: rawSnippet.rawTokenPrefix || null,
   rawTokenConfigured: Boolean(rawSnippet.rawTokenHash),
   isPublic: Boolean(rawSnippet.isPublic),
-  tags
+  tags,
+  // Placeholders the save/run rule would refuse (legacy snippets): shown as
+  // a warning so the author can remove the quotes around them
+  quotedPlaceholders:
+    typeof rawSnippet.code === 'string'
+      ? quotedPlaceholders(rawSnippet.code, rawSnippet.language, rawNames(rawSnippet.variables))
+      : []
 });
+
+/**
+ * @description Snippets with placeholders inside quotes (refused from v1.2.3)
+ * @route /api/snippets/quoted-placeholders
+ * @request GET (admin)
+ */
+export const getQuotedPlaceholderReport = asyncWrapper(
+  async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const rows = await SnippetModel.findAll({ attributes: ['id', 'title', 'language', 'code', 'variables'], raw: true });
+    const flagged = scanQuotedPlaceholders(rows as any[], rawNames);
+    res.status(200).json({ data: { scanned: rows.length, flagged } });
+  }
+);
 
 const snapshotCurrentSnippet = async (
   snippet: {
@@ -217,6 +239,9 @@ export const createSnippet = asyncWrapper(
     if (!isAdminRole(req.user?.role) && rawNames((values as any).variables).length) {
       return next(new ErrorResponse(403, 'Only admins can mark a variable raw (unquoted)'));
     }
+
+    const quoted = quotedPlaceholders(String(values.code || ''), values.language, rawNames((values as any).variables));
+    if (quoted.length) return next(new ErrorResponse(400, quotedPlaceholderMessage(quoted)));
 
     // Create snippet
     const rawSlug = rawSlugForSnippet(values);
@@ -361,6 +386,21 @@ export const updateSnippet = asyncWrapper(
       }
     }
     const { tags: bodyTags, ...values } = <Body>body;
+    // Placeholders inside quotes are refused whenever the code, language or
+    // raw flags change; untouched legacy snippets show a warning instead
+    if (
+      (body.code !== undefined && body.code !== snippet.code) ||
+      (body.language !== undefined && body.language !== snippet.language) ||
+      body.variables !== undefined
+    ) {
+      const nextVariables = body.variables !== undefined ? body.variables : snippet.variables;
+      const quoted = quotedPlaceholders(
+        String(body.code ?? snippet.code ?? ''),
+        body.language ?? snippet.language,
+        rawNames(nextVariables)
+      );
+      if (quoted.length) return next(new ErrorResponse(400, quotedPlaceholderMessage(quoted)));
+    }
     const requestTags = bodyTags ?? (await getTags(snippet.id));
     const parsedRequestTags = tagParser([...requestTags, values.language.toLowerCase()]);
 

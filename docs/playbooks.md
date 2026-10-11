@@ -69,6 +69,13 @@ pipefail` in bash and `exit 1` for "this needs a person".
 > An admin can mark a definition **raw** to insert it as written (for example a
 > list of flags). Raw is never imported from GitHub sync, and a non-admin who edits
 > the code clears it.
+>
+> **Placeholders inside quotes are refused.** A placeholder written inside
+> quotes, backticks, `$( )`, `${ }`, a heredoc, a PowerShell here-string, a
+> Python triple-quoted string or a JavaScript template literal is refused when
+> the snippet is saved and again when it runs, because the value could close
+> your quotes. Remove the quotes around it (or have an admin mark it raw).
+> Placeholders in comments are fine.
 
 
 Snippets use placeholders: `{{NAME}}` or `{{NAME:default}}`. Names are UPPER_SNAKE_CASE

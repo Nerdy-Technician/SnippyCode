@@ -8,6 +8,7 @@ import {
   getPublicSnippet,
   getRawCode,
   getSnippet,
+  getQuotedPlaceholderReport,
   getSnippetRunner,
   getSnippetVersions,
   patchSnippetFlags,
@@ -61,6 +62,9 @@ snippetRouter.route('/search/meaning').post(requireAuth, searchByMeaningRoute);
 snippetRouter
   .route('/collections/rename')
   .post(requireAuth, requireMinimumRole('editor'), renameCollection);
+snippetRouter
+  .route('/quoted-placeholders')
+  .get(requireAuth, requireMinimumRole('admin'), getQuotedPlaceholderReport);
 snippetRouter.route('/runner').get(requireAuth, getSnippetRunner);
 snippetRouter.route('/variable-sources').get(requireAuth, getVariableSources);
 snippetRouter

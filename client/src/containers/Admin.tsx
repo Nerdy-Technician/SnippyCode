@@ -14,6 +14,7 @@ import {
 import { AdminNotifications } from '../components/Admin/AdminNotifications';
 import { AdminSystem } from '../components/Admin/AdminSystem';
 import { AgentRollout } from '../components/Admin/AgentRollout';
+import { QuotedPlaceholders } from '../components/Admin/QuotedPlaceholders';
 import { Button, Card, Layout, PageHeader } from '../components/UI';
 import { GithubAutoSync } from '../components/Admin/GithubAutoSync';
 import { AuthContext } from '../store';
@@ -786,6 +787,9 @@ export const Admin = (): JSX.Element => {
             <AdminSystem />
             <Card classes='variables-card'>
               <AgentRollout />
+            </Card>
+            <Card classes='variables-card'>
+              <QuotedPlaceholders />
             </Card>
           </>
         )}

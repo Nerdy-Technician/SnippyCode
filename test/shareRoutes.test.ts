@@ -52,7 +52,7 @@ describe('share links and raw endpoint', { skip }, () => {
       }
 
       if (options.auth !== false && cookie) {
-        headers.cookie = cookie;
+        { headers.cookie = `${cookie}; XSRF-TOKEN=test-xsrf`; headers['x-xsrf-token'] = 'test-xsrf'; }
       }
 
       const req = http.request({ host: '127.0.0.1', port, method, path, headers }, res => {
