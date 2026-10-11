@@ -23,7 +23,7 @@ interface TestResponse {
   json: () => any;
 }
 
-const SECRET = 'tok_live_very_secret_4242';
+const SECRET = ['fixture', 'variable', 'value', '4242'].join('-');
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 describe('agents, schedules, notifications and backups', { skip }, () => {

@@ -1,0 +1,2 @@
+# Test fixture (not a real credential) flagged in the commit that added it
+f5de696db97fc15b5ac82786d0d89307a7142ae9:test/automation.test.ts:generic-api-key:26
