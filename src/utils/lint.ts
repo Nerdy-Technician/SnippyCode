@@ -125,7 +125,7 @@ const linterKey = (language: string): string | null => {
     return 'shell';
   }
 
-  return LINTERS[value] ? value : null;
+  return Object.prototype.hasOwnProperty.call(LINTERS, value) ? value : null;
 };
 
 export const lintAvailability = (): { [language: string]: { tool: string; available: boolean } } => {
@@ -172,7 +172,13 @@ export const lintCode = (language: string, code: string): Promise<LintResult> =>
     return Promise.resolve({ tool: null, available: false, diagnostics: [] });
   }
 
-  const linter = LINTERS[key]();
+  const make = Object.prototype.hasOwnProperty.call(LINTERS, key) ? LINTERS[key] : undefined;
+
+  if (typeof make !== 'function') {
+    return Promise.resolve({ tool: null, available: false, diagnostics: [] });
+  }
+
+  const linter = make();
 
   if (!onPath(linter.bin)) {
     return Promise.resolve({ tool: linter.tool, available: false, diagnostics: [] });

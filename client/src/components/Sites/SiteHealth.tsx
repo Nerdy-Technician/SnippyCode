@@ -250,7 +250,9 @@ const lastMonths = (count: number) =>
 export const SiteReport = (props: { siteId: number; siteName: string }) => {
   const months = lastMonths(12);
   const [month, setMonth] = useState(months[0].value);
-  const url = `/api/sites/${props.siteId}/report?month=${month}`;
+  // Only ever link to a month from the list, never raw DOM text
+  const safeMonth = months.some(item => item.value === month) ? month : months[0].value;
+  const url = `/api/sites/${encodeURIComponent(String(props.siteId))}/report?month=${encodeURIComponent(safeMonth)}`;
 
   return (
     <div className='site-report'>

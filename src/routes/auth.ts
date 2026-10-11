@@ -17,7 +17,7 @@ import {
   uploadAvatar,
   ensureAvatarDir
 } from '../controllers/auth';
-import { requireAuth } from '../middleware';
+import { authRateLimit, requireAuth } from '../middleware';
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, ensureAvatarDir()),
@@ -38,17 +38,17 @@ const avatarUpload = multer({
 export const authRouter = Router();
 
 authRouter.route('/status').get(getAuthStatus);
-authRouter.route('/setup').post(setupOwner);
-authRouter.route('/login').post(login);
+authRouter.route('/setup').post(authRateLimit, setupOwner);
+authRouter.route('/login').post(authRateLimit, login);
 authRouter.route('/logout').post(logout);
 authRouter.route('/me').get(requireAuth, me).put(requireAuth, updateMe);
-authRouter.route('/me/mfa/setup').post(requireAuth, setupMfa);
-authRouter.route('/me/mfa/enable').post(requireAuth, enableMfa);
-authRouter.route('/me/mfa/disable').post(requireAuth, disableMfa);
+authRouter.route('/me/mfa/setup').post(authRateLimit, requireAuth, setupMfa);
+authRouter.route('/me/mfa/enable').post(authRateLimit, requireAuth, enableMfa);
+authRouter.route('/me/mfa/disable').post(authRateLimit, requireAuth, disableMfa);
 authRouter.route('/me/avatar').get(requireAuth, getAvatar);
 authRouter
   .route('/me/avatar')
   .post(requireAuth, avatarUpload.single('avatar'), uploadAvatar);
 authRouter.route('/me/avatar').delete(requireAuth, deleteAvatar);
-authRouter.route('/oidc/start').get(oidcStart);
-authRouter.route('/oidc/callback').get(oidcCallback);
+authRouter.route('/oidc/start').get(authRateLimit, oidcStart);
+authRouter.route('/oidc/callback').get(authRateLimit, oidcCallback);

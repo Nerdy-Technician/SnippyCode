@@ -2,7 +2,7 @@ import { join } from 'path';
 import { existsSync } from 'fs';
 import express, { Express, Request, Response } from 'express';
 import cookieParser from 'cookie-parser';
-import { errorHandler, securityHeaders } from './middleware';
+import { apiRateLimit, csrfProtection, errorHandler, securityHeaders } from './middleware';
 
 // Routers
 import { snippetRouter } from './routes/snippets';
@@ -50,9 +50,13 @@ export const createApp = (options: AppOptions = {}): Express => {
   app.use('/api/devices', express.json({ limit: '2mb', type: 'application/json' }));
   app.use(express.json({ limit: '256kb', type: 'application/json' }));
   app.use(cookieParser());
+  app.use(csrfProtection);
   clientDirs.forEach(dir => app.use(express.static(dir)));
 
   // Routes
+  app.use('/api', apiRateLimit);
+  app.use('/raw', apiRateLimit);
+  app.use('/agent', apiRateLimit);
   app.use('/api/auth', authRouter);
   app.use('/api/snippets', snippetRouter);
   app.get('/raw/:rawRef', getRawCode);

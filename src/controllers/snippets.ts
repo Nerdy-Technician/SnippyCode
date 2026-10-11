@@ -486,19 +486,18 @@ export const getRawCode = asyncWrapper(
     }
 
     const token = String(req.query.key || req.header('x-api-key') || '');
-    const globalKeyOk = token ? await verifyRawApiKey(token) : false;
+    const globalKeyOk = await verifyRawApiKey(token);
 
     // A valid snippet token or the admin raw API key unlocks private snippets
     // and server-side values (site, team, secrets) for rendering
-    const tokenMatch = token
-      ? (
-          await SnippetModel.findAll({
-            where: lookup,
-            order: [['id', 'ASC']],
-            raw: true
-          })
-        ).find(candidate => globalKeyOk || verifyTokenHash(token, candidate.rawTokenHash))
-      : undefined;
+    // verifyRawApiKey and verifyTokenHash reject empty tokens themselves
+    const tokenMatch = (
+      await SnippetModel.findAll({
+        where: lookup,
+        order: [['id', 'ASC']],
+        raw: true
+      })
+    ).find(candidate => globalKeyOk || verifyTokenHash(token, candidate.rawTokenHash));
 
     // Public snippets are served to anyone, exactly like the /s/ share page
     const shared = tokenMatch

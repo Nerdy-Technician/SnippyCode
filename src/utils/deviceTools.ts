@@ -845,25 +845,25 @@ export const parseToolOutput = (tool: ReadTool, os: ToolOs, stdout: string): unk
 
   switch (tool) {
     case 'system': {
-      const kv: { [key: string]: string } = {};
+      const facts = new Map<string, string>();
       rows(stdout, 'kv').forEach(([key, value]) => {
-        kv[key] = (value || '').trim();
+        facts.set(key, (value || '').trim());
       });
 
       return {
-        os: kv.os,
-        kernel: kv.kernel,
-        arch: kv.arch,
-        hostname: kv.hostname,
-        manufacturer: kv.manufacturer || undefined,
-        model: kv.model || undefined,
-        serial: kv.serial || undefined,
-        cpu: kv.cpu || undefined,
-        cores: num(kv.cores),
-        load: kv.load,
-        boot: kv.boot || undefined,
-        users: kv.users || undefined,
-        memTotalMb: num(kv.memTotalMb),
+        os: facts.get('os'),
+        kernel: facts.get('kernel'),
+        arch: facts.get('arch'),
+        hostname: facts.get('hostname'),
+        manufacturer: facts.get('manufacturer') || undefined,
+        model: facts.get('model') || undefined,
+        serial: facts.get('serial') || undefined,
+        cpu: facts.get('cpu') || undefined,
+        cores: num(facts.get('cores')),
+        load: facts.get('load'),
+        boot: facts.get('boot') || undefined,
+        users: facts.get('users') || undefined,
+        memTotalMb: num(facts.get('memTotalMb')),
         disks: rows(stdout, 'disk').map(([mount, device, type, total, used]) => ({
           mount,
           device,
@@ -982,7 +982,7 @@ export const parseToolOutput = (tool: ReadTool, os: ToolOs, stdout: string): unk
         .concat(rows(stdout, 's', 1))
         .map(([line]): LogEntry => {
           // "2026-09-30T19:00:00+0100 host unit[123]: message"
-          const match = /^(\S+)\s+\S+\s+([^:]+):\s?(.*)$/.exec(line || '');
+          const match = /^(\S+)\s+\S+\s+([^:\s][^:]*):\s?(.*)$/.exec(line || '');
           return match
             ? { time: match[1], level: /error|fail|crit|emerg|alert/i.test(match[3]) ? 'error' : 'warning', source: match[2], message: match[3] }
             : { time: '', level: 'warning', source: '', message: line || '' };
