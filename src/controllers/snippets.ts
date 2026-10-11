@@ -20,7 +20,7 @@ import {
   tagParser,
   createTags,
   verifyRawApiKey,
-  verifyTokenHash,
+  checkTokenHash,
   isSnippetRunEnabled,
   runnerPublicSettings,
   publicAiAssistStatus,
@@ -491,13 +491,30 @@ export const getRawCode = asyncWrapper(
     // A valid snippet token or the admin raw API key unlocks private snippets
     // and server-side values (site, team, secrets) for rendering
     // verifyRawApiKey and verifyTokenHash reject empty tokens themselves
-    const tokenMatch = (
-      await SnippetModel.findAll({
-        where: lookup,
-        order: [['id', 'ASC']],
-        raw: true
-      })
-    ).find(candidate => globalKeyOk || verifyTokenHash(token, candidate.rawTokenHash));
+    const candidates = await SnippetModel.findAll({
+      where: lookup,
+      order: [['id', 'ASC']],
+      raw: true
+    });
+    let tokenMatch: (typeof candidates)[number] | undefined;
+
+    for (const candidate of candidates) {
+      if (globalKeyOk) {
+        tokenMatch = candidate;
+        break;
+      }
+
+      const check = await checkTokenHash(token, candidate.rawTokenHash);
+
+      if (check.ok) {
+        // Replace a migrated pre-v1.2.2 hash with a plain scrypt one
+        if (check.upgrade) {
+          await SnippetModel.update({ rawTokenHash: check.upgrade }, { where: { id: candidate.id } });
+        }
+        tokenMatch = candidate;
+        break;
+      }
+    }
 
     // Public snippets are served to anyone, exactly like the /s/ share page
     const shared = tokenMatch
@@ -842,7 +859,7 @@ export const generateSnippetRawToken = asyncWrapper(
       return next(new ErrorResponse(404, 'Snippet was not found'));
     }
 
-    const rawToken = createRawSnippetToken();
+    const rawToken = await createRawSnippetToken();
     await snippet.update({
       rawTokenHash: rawToken.hash,
       rawTokenPrefix: rawToken.prefix,

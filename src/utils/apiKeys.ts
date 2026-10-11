@@ -1,4 +1,5 @@
-import { createHash, randomBytes, timingSafeEqual } from 'crypto';
+import { randomBytes } from 'crypto';
+import { checkToken, hashToken, TokenCheck } from './tokenHash';
 import { SettingModel } from '../models';
 
 interface RawApiKeySettings {
@@ -7,53 +8,47 @@ interface RawApiKeySettings {
   createdAt: string;
 }
 
-export const hashApiKey = (key: string): string =>
-  createHash('sha256').update(key).digest('hex');
+export const hashApiKey = (key: string): Promise<string> => hashToken(key);
 
-export const createRawApiKey = (): {
+export const createRawApiKey = async (): Promise<{
   key: string;
   settings: RawApiKeySettings;
-} => {
+}> => {
   const secret = randomBytes(32).toString('base64url');
   const key = `sb_raw_${secret}`;
 
   return {
     key,
     settings: {
-      hash: hashApiKey(key),
+      hash: await hashApiKey(key),
       prefix: key.slice(0, 14),
       createdAt: new Date().toISOString()
     }
   };
 };
 
-export const createRawSnippetToken = (): {
+export const createRawSnippetToken = async (): Promise<{
   token: string;
   hash: string;
   prefix: string;
   createdAt: Date;
-} => {
+}> => {
   const secret = randomBytes(32).toString('base64url');
   const token = `sb_snip_${secret}`;
 
   return {
     token,
-    hash: hashApiKey(token),
+    hash: await hashApiKey(token),
     prefix: token.slice(0, 16),
     createdAt: new Date()
   };
 };
 
-export const verifyTokenHash = (token: string, hash?: string | null): boolean => {
-  if (!token || !hash) {
-    return false;
-  }
+export const checkTokenHash = (token: string, hash?: string | null): Promise<TokenCheck> =>
+  checkToken(token, hash);
 
-  const expected = Buffer.from(hash, 'hex');
-  const actual = Buffer.from(hashApiKey(token), 'hex');
-
-  return expected.length === actual.length && timingSafeEqual(expected, actual);
-};
+export const verifyTokenHash = async (token: string, hash?: string | null): Promise<boolean> =>
+  (await checkToken(token, hash)).ok;
 
 export const getRawApiKeySettings =
   async (): Promise<RawApiKeySettings | null> => {
@@ -89,8 +84,14 @@ export const verifyRawApiKey = async (key?: string): Promise<boolean> => {
     return false;
   }
 
-  const expected = Buffer.from(settings.hash, 'hex');
-  const actual = Buffer.from(hashApiKey(key), 'hex');
+  const check = await checkToken(key, settings.hash);
 
-  return expected.length === actual.length && timingSafeEqual(expected, actual);
+  if (check.ok && check.upgrade) {
+    await SettingModel.update(
+      { value: JSON.stringify({ ...settings, hash: check.upgrade }) },
+      { where: { key: 'rawApiKey' } }
+    );
+  }
+
+  return check.ok;
 };

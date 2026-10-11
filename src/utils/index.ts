@@ -28,3 +28,4 @@ export * from './backup';
 export * from './deviceTools';
 export * from './deviceFields';
 export * from './monitoring';
+export * from './tokenHash';

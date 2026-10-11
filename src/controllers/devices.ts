@@ -24,7 +24,7 @@ import {
   hashApiKey,
   isDeviceOnline,
   requestIp,
-  verifyTokenHash,
+  checkTokenHash,
   ACTION_TOOLS,
   READ_TOOLS,
   TOOL_LABELS,
@@ -94,9 +94,30 @@ const auditActor = (req: AuthenticatedRequest) => ({
   ipAddress: requestIp(req)
 });
 
-const newToken = (kind: 'enroll' | 'dev') => {
+const newToken = async (kind: 'enroll' | 'dev') => {
   const token = `sc_${kind}_${randomBytes(24).toString('base64url')}`;
-  return { token, hash: hashApiKey(token), prefix: token.slice(0, 16) };
+  return { token, hash: await hashApiKey(token), prefix: token.slice(0, 16) };
+};
+
+// Hashes are salted, so tokens are found by their stored prefix and then
+// checked against each candidate's hash (normally exactly one)
+const findByToken = async <T extends { tokenHash: string; update: (values: { tokenHash: string }, options?: object) => Promise<unknown> }>(
+  token: string,
+  candidates: T[],
+  options: object = {}
+): Promise<T | null> => {
+  for (const candidate of candidates) {
+    const check = await checkTokenHash(token, candidate.tokenHash);
+
+    if (check.ok) {
+      // Replace a migrated pre-v1.2.2 hash with a plain scrypt one
+      if (check.upgrade) {
+        await candidate.update({ tokenHash: check.upgrade }, options);
+      }
+      return candidate;
+    }
+  }
+  return null;
 };
 
 export const deviceJson = (
@@ -190,7 +211,7 @@ export const createEnrollment = asyncWrapper(
 
     const hours = Math.min(Math.max(Number(req.body?.expiresHours) || 24, 1), 24 * 30);
     const maxUses = Math.min(Math.max(Number(req.body?.maxUses) || 1, 1), 500);
-    const { token, hash, prefix } = newToken('enroll');
+    const { token, hash, prefix } = await newToken('enroll');
     const expiresAt = new Date(Date.now() + hours * 3600_000);
 
     await DeviceEnrollmentModel.create({
@@ -356,10 +377,16 @@ export const requireAgent = async (
   try {
     const token = bearer(req);
     const device = token.startsWith('sc_dev_')
-      ? await DeviceModel.findOne({ where: { tokenHash: hashApiKey(token), revokedAt: null } })
+      ? await findByToken(
+          token,
+          await DeviceModel.findAll({
+            where: { tokenPrefix: token.slice(0, 16), revokedAt: null },
+            limit: 5
+          })
+        )
       : null;
 
-    if (!device || !verifyTokenHash(token, device.tokenHash)) {
+    if (!device) {
       return next(new ErrorResponse(401, 'Device token is not valid or was revoked'));
     }
 
@@ -395,15 +422,19 @@ export const enrollDevice = asyncWrapper(
     const hostname = clean(body.hostname, 255) || 'unknown-host';
 
     const result = await sequelize.transaction(async transaction => {
-      const enrollment = await DeviceEnrollmentModel.findOne({
-        where: { tokenHash: hashApiKey(token) },
-        lock: transaction.LOCK.UPDATE,
-        transaction
-      });
+      const enrollment = await findByToken(
+        token,
+        await DeviceEnrollmentModel.findAll({
+          where: { tokenPrefix: token.slice(0, 16) },
+          lock: transaction.LOCK.UPDATE,
+          limit: 5,
+          transaction
+        }),
+        { transaction }
+      );
 
       if (
         !enrollment ||
-        !verifyTokenHash(token, enrollment.tokenHash) ||
         enrollment.expiresAt.getTime() < Date.now() ||
         enrollment.uses >= enrollment.maxUses
       ) {
@@ -411,7 +442,7 @@ export const enrollDevice = asyncWrapper(
       }
 
       await enrollment.update({ uses: enrollment.uses + 1 }, { transaction });
-      const deviceToken = newToken('dev');
+      const deviceToken = await newToken('dev');
       const device = await DeviceModel.create(
         {
           siteId: enrollment.siteId,
