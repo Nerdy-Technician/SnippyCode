@@ -1,3 +1,4 @@
+import { quotedPlaceholders, quotedPlaceholderMessage } from './placeholderContext';
 // Snippet placeholders: {{NAME}} or {{NAME:default}}.
 // Names are UPPER_SNAKE so Mustache/Jinja/Helm templates ({{ name }}, {{ .Values }})
 // and GitHub Actions expressions (${{ ... }}) are left alone.
@@ -118,6 +119,12 @@ export const renderTemplateSafe = (
   ...sources: Array<Record<string, string | undefined>>
 ): string => {
   const raw = new Set(options.raw || []);
+  // A placeholder inside quotes, $( ), ${ }, backticks, a heredoc or a
+  // template literal could break out of the author's own quoting
+  if (quotesValues(options.language)) {
+    const quoted = quotedPlaceholders(code, options.language, options.raw || []);
+    if (quoted.length) throw new TemplateValueError(quotedPlaceholderMessage(quoted));
+  }
   const errors: string[] = [];
   const out = (code || '').replace(placeholderPattern(), (whole, dollar, name, fallback) => {
     if (dollar) return whole;

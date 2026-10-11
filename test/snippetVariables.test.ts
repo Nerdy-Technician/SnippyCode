@@ -51,7 +51,7 @@ describe('snippet variables', { skip }, () => {
       if (payload !== undefined) headers['content-length'] = Buffer.byteLength(payload);
 
       const who = options.as === undefined ? 'owner' : options.as;
-      if (who && cookies[who]) headers.cookie = cookies[who];
+      if (who && cookies[who]) { headers.cookie = `${cookies[who]}; XSRF-TOKEN=test-xsrf`; headers['x-xsrf-token'] = 'test-xsrf'; }
       if (options.ip) headers['x-forwarded-for'] = options.ip;
 
       const req = http.request({ host: '127.0.0.1', port, method, path, headers }, res => {
@@ -334,5 +334,26 @@ describe('snippet variables', { skip }, () => {
       body: { title: 'Raw', language: 'bash', code: 'ls {{FLAGS}} /tmp\n', description: '', variables: rawDefs }, as: 'editor'
     }));
     assert.equal(edited.variables[0].raw, undefined);
+  });
+  test('M3: quoted placeholders are refused at save, flagged on legacy snippets and in the admin report', async () => {
+    const refused = await request('POST', '/api/snippets', {
+      body: { title: 'Quoted', language: 'bash', code: "echo '{{TARGET}}'\n", description: '' }
+    });
+    assert.equal(refused.status, 400);
+    assert.match(refused.text, /remove the surrounding quotes/);
+    const fine = await ok(request('POST', '/api/snippets', { body: { title: 'Bare', language: 'bash', code: 'echo {{TARGET}}\n', description: '' } }), 201);
+    const put = await request('PUT', `/api/snippets/${fine.id}`, {
+      body: { title: 'Bare', language: 'bash', code: 'echo "$({{TARGET}})"\n', description: '' }
+    });
+    assert.equal(put.status, 400);
+    // A legacy snippet saved before the rule is shown with a warning, not hidden
+    const legacy = await models.SnippetModel.create({ title: 'Legacy', language: 'bash', code: 'echo "{{TARGET}}"\n', description: '', docs: '' } as any);
+    const shown = await ok(request('GET', `/api/snippets/${legacy.id}`));
+    assert.equal(shown.quotedPlaceholders.length, 1);
+    assert.equal(shown.quotedPlaceholders[0].context, 'double quotes');
+    const report = await ok(request('GET', '/api/snippets/quoted-placeholders'));
+    assert.ok(report.flagged.some((item: any) => item.id === legacy.id));
+    assert.ok(!report.flagged.some((item: any) => item.id === fine.id));
+    assert.equal((await request('GET', '/api/snippets/quoted-placeholders', { as: 'editor' })).status, 403);
   });
 });

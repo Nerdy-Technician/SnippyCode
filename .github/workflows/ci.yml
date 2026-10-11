@@ -206,6 +206,30 @@ jobs:
           cache-from: type=gha,scope=ci
           cache-to: type=gha,mode=max,scope=ci
 
+      - name: Start the image as non-root and check it serves
+        env:
+          PGPASSWORD_CI: ci-only-password
+        run: |
+          set -euo pipefail
+          docker network create sc-ci
+          docker run -d --name sc-db --network sc-ci -e POSTGRES_PASSWORD="$PGPASSWORD_CI" -e POSTGRES_DB=snippycode postgres:16-alpine
+          for _ in $(seq 1 30); do docker exec sc-db pg_isready -U postgres >/dev/null 2>&1 && break; sleep 2; done
+          docker run -d --name sc-app --network sc-ci -p 5000:5000 \
+            -e DATABASE_URL="postgres://postgres:${PGPASSWORD_CI}@sc-db:5432/snippycode" \
+            -e SESSION_SECRET="$(openssl rand -hex 32)" -e VARIABLES_SECRET_KEY="$(openssl rand -hex 32)" \
+            snippycode:ci
+          ok=""
+          for _ in $(seq 1 45); do
+            if curl -fsS -o /dev/null http://127.0.0.1:5000/; then ok=1; break; fi
+            sleep 2
+          done
+          docker logs sc-app | tail -n 40
+          test -n "$ok"
+          uid="$(docker exec sc-app id -u)"
+          echo "running as uid $uid"
+          test "$uid" != "0"
+          docker exec sc-app sh -c 'touch /app/data/backups/.write-test && rm /app/data/backups/.write-test'
+
       - name: Scan image (fail on fixable critical)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

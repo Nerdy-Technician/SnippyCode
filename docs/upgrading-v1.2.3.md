@@ -11,5 +11,16 @@
 3. **Placeholder values are now quoted** for the snippet's language (see
    `docs/playbooks.md`). Snippets that wrapped placeholders in quotes, such as
    `"{{NAME}}"`, should drop the quotes, or an admin can mark the variable raw.
+   Placeholders inside quotes, backticks, `$( )`, `${ }`, heredocs, here-strings
+   or template literals are now refused at save and at run time. Before upgrading,
+   list the snippets that need fixing with the read-only report (it runs no
+   migrations, so you can point the new image at the old database first):
+   `node build/quotedPlaceholdersReport.js` (in Docker:
+   `docker compose exec snippycode node build/quotedPlaceholdersReport.js`).
+   After upgrading, Admin > System lists them, and each one shows a warning.
 4. **Agent auto-update** needs a signing key: see `docs/agent-updates.md`.
-5. **Rollback:** restore the pre-upgrade backup and redeploy the v1.2.2 image.
+5. **Docker now runs as the unprivileged `node` user (uid 1000).** A data
+   volume created by an older image is owned by root, so give it to that user
+   once before starting v1.2.3:
+   `docker compose run --rm --user root --entrypoint chown snippycode -R node:node /app/data`
+6. **Rollback:** restore the pre-upgrade backup and redeploy the v1.2.2 image.

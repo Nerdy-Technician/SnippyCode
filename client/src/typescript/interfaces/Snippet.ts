@@ -14,6 +14,8 @@ export interface NewSnippet {
   isPublic?: boolean;
   variables?: VariableDefinition[];
   dangerous?: boolean;
+  /** Placeholders inside quotes that the run rule refuses (legacy snippets) */
+  quotedPlaceholders?: Array<{ name: string; line: number; context: string }>;
 }
 
 export interface SnippetUsage {

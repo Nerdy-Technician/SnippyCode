@@ -76,12 +76,11 @@ export const csrfProtection = (req: Request, res: Response, next: NextFunction):
     return next();
   }
 
-  // A browser write that rides on the session cookie must carry the token.
-  // Browsers always add Origin or Sec-Fetch-Site to such writes; agents, curl
-  // and API keys send neither and carry no session cookie by accident.
+  // Any write that rides on the session cookie must carry the token, whether
+  // or not the client sent Origin or Sec-Fetch-Site. Agents (device tokens)
+  // and API keys never use the session cookie, so they are unaffected.
   const hasSession = SESSION_COOKIES.some(name => Boolean(cookies[name]));
-  const fromBrowser = Boolean(req.get('sec-fetch-site') || req.get('origin'));
-  if (hasSession && fromBrowser && !tokensEqual(req.cookies['XSRF-TOKEN'], req.get(CSRF_HEADER))) {
+  if (hasSession && !tokensEqual(req.cookies['XSRF-TOKEN'], req.get(CSRF_HEADER))) {
     res.status(403).json({ success: false, error: 'Missing or invalid CSRF token. Reload the page and try again.' });
     return;
   }

@@ -44,7 +44,7 @@ describe('runbook guide and example import', { skip }, () => {
       if (payload !== undefined) headers['content-length'] = Buffer.byteLength(payload);
 
       const who = options.as === undefined ? 'owner' : options.as;
-      if (who && cookies[who]) headers.cookie = cookies[who];
+      if (who && cookies[who]) { headers.cookie = `${cookies[who]}; XSRF-TOKEN=test-xsrf`; headers['x-xsrf-token'] = 'test-xsrf'; }
       if (options.ip) headers['x-forwarded-for'] = options.ip;
 
       const req = http.request({ host: '127.0.0.1', port, method, path, headers }, res => {

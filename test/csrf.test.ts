@@ -34,9 +34,15 @@ test('a browser write on the session cookie needs the matching header', () => {
   assert.equal(run({ cookies: session, headers: { 'sec-fetch-site': 'same-origin', 'x-xsrf-token': 'tok-123' } }).next, true);
 });
 
-test('agents and API clients (no session cookie, no browser headers) pass', () => {
+test('a session-cookie write with no Origin and no Sec-Fetch-Site still needs the token', () => {
+  assert.equal(run({ cookies: { snippycode_session: 's' } }).status, 403);
+  assert.equal(run({ cookies: { snippysafe_session: 's', 'XSRF-TOKEN': 't1' } }).status, 403);
+  assert.equal(run({ cookies: { snippycode_session: 's', 'XSRF-TOKEN': 't1' }, headers: { 'x-xsrf-token': 't1' } }).next, true);
+});
+
+test('agents and API keys (no session cookie) are unaffected', () => {
   assert.equal(run({ headers: { authorization: 'Bearer x' } }).next, true);
-  assert.equal(run({ cookies: { snippycode_session: 's' } }).next, true);
+  assert.equal(run({ headers: { 'x-device-token': 'dev_x' } }).next, true);
 });
 
 test('cross-site writes are still blocked outright', () => {

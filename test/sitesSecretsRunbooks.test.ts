@@ -50,7 +50,7 @@ describe('variables, secrets, sites, runs and runbooks', { skip }, () => {
       }
 
       if (who && cookies[who]) {
-        headers.cookie = cookies[who];
+        { headers.cookie = `${cookies[who]}; XSRF-TOKEN=test-xsrf`; headers['x-xsrf-token'] = 'test-xsrf'; }
       }
 
       const req = http.request({ host: '127.0.0.1', port, method, path, headers }, res => {
