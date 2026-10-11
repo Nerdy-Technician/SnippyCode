@@ -1,4 +1,5 @@
 import { NextFunction, Request, Response } from 'express';
+import { randomBytes, timingSafeEqual } from 'crypto';
 import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 
 const envNumber = (name: string, fallback: number): number => {
@@ -44,9 +45,45 @@ const hostOf = (value?: string | null): string | null => {
  * host (or PUBLIC_BASE_URL). Requests without these headers (agents, curl,
  * API keys) carry no browser cookies by accident and pass through.
  */
+export const CSRF_COOKIE = 'XSRF-TOKEN';
+export const CSRF_HEADER = 'x-xsrf-token';
+const SESSION_COOKIES = ['snippycode_session', 'snippysafe_session'];
+
+const tokensEqual = (cookieToken: unknown, headerToken: unknown): boolean => {
+  if (typeof cookieToken !== 'string' || typeof headerToken !== 'string' || !cookieToken || !headerToken) return false;
+  const a = Buffer.from(cookieToken);
+  const b = Buffer.from(headerToken);
+  return a.length === b.length && timingSafeEqual(a, b);
+};
+
 export const csrfProtection = (req: Request, res: Response, next: NextFunction): void => {
+  // Double-submit token: a readable cookie the app's own pages echo back in
+  // the X-XSRF-TOKEN header (axios does this for same-origin requests).
+  // Another site can make the browser send the cookie, but cannot read it.
+  const cookies = req.cookies || {};
+  const cookieToken = cookies['XSRF-TOKEN'];
+  // Issued on page loads and other reads, so the app has it before any write
+  if (!cookieToken && SAFE_METHODS.has(req.method)) {
+    res.cookie('XSRF-TOKEN', randomBytes(24).toString('base64url'), {
+      httpOnly: false,
+      sameSite: 'strict',
+      secure: process.env.NODE_ENV === 'production',
+      path: '/'
+    });
+  }
+
   if (SAFE_METHODS.has(req.method)) {
     return next();
+  }
+
+  // A browser write that rides on the session cookie must carry the token.
+  // Browsers always add Origin or Sec-Fetch-Site to such writes; agents, curl
+  // and API keys send neither and carry no session cookie by accident.
+  const hasSession = SESSION_COOKIES.some(name => Boolean(cookies[name]));
+  const fromBrowser = Boolean(req.get('sec-fetch-site') || req.get('origin'));
+  if (hasSession && fromBrowser && !tokensEqual(req.cookies['XSRF-TOKEN'], req.get(CSRF_HEADER))) {
+    res.status(403).json({ success: false, error: 'Missing or invalid CSRF token. Reload the page and try again.' });
+    return;
   }
 
   const fetchSite = String(req.get('sec-fetch-site') || '').toLowerCase();

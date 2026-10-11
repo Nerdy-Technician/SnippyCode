@@ -16,6 +16,8 @@ const setup = () => {
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, 'id'), '#!/bin/sh\necho 0\n', { mode: 0o755 });
+  // CI runners have a real systemd; the installer must never touch it in a test
+  fs.writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   // Fake server: logs the enrol fields and answers with $FAKE_AGENT_ID (or echoes it)
   fs.writeFileSync(
     path.join(bin, 'curl'),

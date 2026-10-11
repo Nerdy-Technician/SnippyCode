@@ -1,6 +1,6 @@
 # Upgrading to v1.2.3
 
-1. **Back up first** (`npm run backup` or Admin, then Backups). Migrations 18 to 26 run on start.
+1. **Back up first** (`npm run backup`, `docker exec <container> node build/backupCli.js` in Docker, or Admin, then Backups). Migrations 18 to 26 run on start.
 2. **`VARIABLES_SECRET_KEY` is required in production.** v1.2.3 no longer falls back to
    `SESSION_SECRET` and refuses to start without it.
    - If you never set it, your stored secrets were encrypted with `SESSION_SECRET`.

@@ -31,7 +31,12 @@ ENV NODE_ENV=production
 RUN apk add --no-cache bash python3 bubblewrap shellcheck ruff
 
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# npm is only needed to install; dropping it keeps its bundled dependencies
+# (and their CVEs) out of the runtime image. Use `node build/backupCli.js`
+# for backups inside the container.
+RUN npm ci --omit=dev && npm cache clean --force \
+  && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+     /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /root/.npm
 
 COPY --from=build /app/build ./build
 COPY --from=build /app/public ./public

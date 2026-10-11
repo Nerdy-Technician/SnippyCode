@@ -57,8 +57,13 @@ if (command === 'keygen') {
   fs.mkdirSync(out, { recursive: true, mode: 0o700 });
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const keyFile = path.join(out, 'agent-signing.key.pem');
-  if (fs.existsSync(keyFile)) die(`${keyFile} already exists; not overwriting.`);
-  fs.writeFileSync(keyFile, privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
+  // 'wx' creates the file atomically and fails if it exists: no check-then-write race
+  try {
+    fs.writeFileSync(keyFile, privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600, flag: 'wx' });
+  } catch (err) {
+    if (err && err.code === 'EEXIST') die(`${keyFile} already exists; not overwriting.`);
+    throw err;
+  }
   fs.writeFileSync(path.join(out, 'agent-signing.pub.pem'), publicKey.export({ type: 'spki', format: 'pem' }), { mode: 0o644 });
   console.log(`Private key: ${keyFile} (keep offline)\nPublic key line: ${publicKeyLine(publicKey)}`);
 } else if (command === 'sign') {
