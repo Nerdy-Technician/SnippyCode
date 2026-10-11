@@ -12,3 +12,5 @@ export * from './SnippetRun';
 export * from './Runbook';
 export * from './Automation';
 export * from './Monitoring';
+export * from './GithubSync';
+export * from './RunApproval';

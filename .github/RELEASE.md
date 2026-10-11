@@ -1,3 +1,26 @@
+# SnippyCode v1.2.3 Release Notes
+
+Release version: `v1.2.3`
+
+## Highlights
+
+- New: bulk enrolment with reusable, expiring tokens (default 7 days, max 365) and admin-only re-enrolment.
+- New: device-targeted schedules (individual devices, sites, shared coloured tags) with per-device run history.
+- New: two-way GitHub sync with conflict detection, backups and no silent overwrites (off by default).
+- New: typed snippet variables with run-time prompts; schedule values encrypted at rest.
+- New: approval for risky runs, voided automatically if the code, values or targets change.
+- New: signed agent auto-update for Linux with staged rollout and automatic rollback pause.
+- New: stable agent IDs with automatic clone handling for golden images.
+- Missed schedule runs are skipped and logged; run output is kept for 90 days.
+
+## Upgrading to v1.2.3
+
+- Back up the database first (`npm run backup`, `docker exec <container> node build/backupCli.js` in Docker, or the admin UI). Migrations 18 to 26 run on start.
+- `VARIABLES_SECRET_KEY` is required in production; the server refuses to start without it and no longer falls back to `SESSION_SECRET`. If you relied on the fallback, set `VARIABLES_SECRET_KEY` to your current `SESSION_SECRET` value so existing secrets stay readable. Existing schedule values are encrypted on upgrade.
+- Placeholder values are now quoted for the snippet's language; drop quotes written around placeholders (`"{{NAME}}"` becomes `{{NAME}}`). See `docs/upgrading-v1.2.3.md`.
+- Agent auto-update needs a release signing key: generate it offline with `scripts/agent-release.js`, set `AGENT_UPDATE_PUBLIC_KEYS` on the server and keep the private key off the server. See `docs/agent-updates.md`.
+- Rollback: restore the pre-upgrade backup and redeploy the v1.2.2 image; migrations are not reversed automatically.
+
 # SnippyCode v1.2.2 Release Notes
 
 Release version: `v1.2.2`

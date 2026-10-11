@@ -1,4 +1,6 @@
 export * from './Home';
+export * from './RunbookGuide';
+export * from './Approvals';
 export * from './Snippet';
 export * from './Snippets';
 export * from './Editor';

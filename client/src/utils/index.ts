@@ -12,3 +12,8 @@ export * from './sha256';
 export * from './installCommands';
 export * from './resolveVariables';
 export * from './copyAsync';
+export * from './enrolment';
+export * from './scheduleTargets';
+export * from './snippetVariables';
+export * from './sharedTags';
+export * from './approvals';

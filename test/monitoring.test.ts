@@ -2,6 +2,7 @@
  * Monitoring: policy scopes, file listings, and (with TEST_DATABASE_URL) the
  * alert lifecycle, policy schedules, patch compliance and site reports.
  */
+import './testDbEnv';
 import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'http';
@@ -315,7 +316,7 @@ describe('alerts, policies and reports', { skip }, () => {
     await ok(request('POST', `/api/schedules/${schedule.id}/run`), 202);
     const job = await models.AgentJobModel.findOne({ where: { deviceId, snippetId: snippet.id } });
     assert.ok(job, 'the policy device got the job');
-    assert.equal(utils.decryptSecret(job.payload), 'echo AT-0042\n', 'device fields fill {{DEVICE_*}} placeholders');
+    assert.equal(utils.decryptSecret(job.payload), "echo 'AT-0042'\n", 'device fields fill {{DEVICE_*}} placeholders');
   });
 
   test('site health, patch compliance and the monthly report', async () => {

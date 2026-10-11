@@ -146,6 +146,7 @@ Core environment variables:
 | `SNIPPET_RUN_ENABLED` | No | Set `true` to allow editors to run bash, Python, or Node snippets on the server. |
 | `SNIPPET_RUN_TIMEOUT_MS` | No | Runner timeout. Defaults to `15000`, max `60000`. |
 | `PUBLIC_BASE_URL` | No | Public URL used in share links and the PowerShell one-liner, for example `https://snippycode.example.com`. Defaults to the browser's origin. |
+| `RUN_OUTPUT_RETENTION_DAYS` | No | Days to keep run output (stdout/stderr records); a daily scheduler job deletes older ones. Defaults to `90`; `0` or blank turns cleanup off. |
 
 Optional GitHub sync:
 
@@ -158,6 +159,8 @@ GITHUB_SNIPPETS_PATH=snippets
 ```
 
 The GitHub token needs contents read/write access to the target private repository.
+
+Admin → GitHub has manual Upload/Download buttons and an optional automatic two-way sync for snippets and runbooks (auto-upload and auto-download toggles, both off by default, one shared interval, default hourly). Items changed on both sides are kept twice and shown as conflicts to resolve; deletes are never synced; a backup is taken before any download that changes local data.
 
 ## Roles
 

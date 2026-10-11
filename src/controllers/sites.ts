@@ -78,6 +78,7 @@ const siteJson = (
   site: SiteInstance,
   extra: {
     memberIds?: number[];
+    adminIds?: number[];
     variableCount?: number;
     lastRunAt?: Date | null;
     deviceCount?: number;
@@ -148,6 +149,11 @@ export const getSites = asyncWrapper(
           siteJson(site, {
             memberIds: admin
               ? members.filter(member => member.siteId === site.id).map(member => member.userId)
+              : undefined,
+            adminIds: admin
+              ? members
+                  .filter(member => member.siteId === site.id && member.role === 'admin')
+                  .map(member => member.userId)
               : undefined,
             variableCount: Number(counts.find(row => row.siteId === site.id)?.count || 0),
             lastRunAt: runs.find(row => row.siteId === site.id)?.lastRunAt || null,
@@ -241,7 +247,8 @@ export const updateSite = asyncWrapper(
 );
 
 /**
- * @description Replace who can see a members-only site (admins)
+ * @description Replace who can see a members-only site (admins).
+ * Optional adminIds: members who may also manage the site's enrolment tokens.
  * @route /api/sites/:id/members
  * @request PUT
  */
@@ -260,12 +267,20 @@ export const setSiteMembers = asyncWrapper(
       where: { id: { [Op.in]: requested.length ? requested : [-1] } },
       attributes: ['id']
     });
-    const userIds = users.map(user => user.id);
+    const adminRequested: number[] = Array.isArray(req.body.adminIds)
+      ? req.body.adminIds.map(Number).filter((id: number) => Number.isSafeInteger(id))
+      : [];
+    const extraAdmins = adminRequested.length
+      ? await UserModel.findAll({ where: { id: { [Op.in]: adminRequested } }, attributes: ['id'] })
+      : [];
+    // Site admins are always members too
+    const userIds = Array.from(new Set([...users.map(user => user.id), ...extraAdmins.map(user => user.id)]));
+    const adminIds = userIds.filter(id => adminRequested.includes(id));
 
     await sequelize.transaction(async transaction => {
       await SiteMemberModel.destroy({ where: { siteId: site.id }, transaction });
       await SiteMemberModel.bulkCreate(
-        userIds.map(userId => ({ siteId: site.id, userId })),
+        userIds.map(userId => ({ siteId: site.id, userId, role: adminIds.includes(userId) ? 'admin' : 'member' })),
         { transaction }
       );
     });
@@ -274,10 +289,10 @@ export const setSiteMembers = asyncWrapper(
     await auditLog('site.members_updated', {
       ...auditActor(req),
       target: `site:${site.id}`,
-      metadata: { name: site.name, memberCount: userIds.length }
+      metadata: { name: site.name, memberCount: userIds.length, adminIds }
     });
 
-    res.status(200).json({ data: { memberIds: userIds } });
+    res.status(200).json({ data: { memberIds: userIds, adminIds } });
   }
 );
 

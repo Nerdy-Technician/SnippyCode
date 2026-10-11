@@ -1,9 +1,12 @@
+import { Link } from 'react-router-dom';
+import { approvalMessage, heldApproval } from '../../utils/approvals';
 import { useContext, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { AuthContext } from '../../store';
 import { AgentJobState, Device, Response, Site, Snippet } from '../../typescript/interfaces';
 import { apiError } from '../Variables/VariableFields';
 import { RunOutput } from '../Runs/RunHistory';
+import { runValueProblems } from '../../utils/snippetVariables';
 
 interface ServerResult {
   runId: number;
@@ -20,6 +23,8 @@ interface Props {
   snippet: Snippet;
   site: Site | null;
   inputs: Record<string, string>;
+  /** Values already resolved from saved variables, to know what is still missing */
+  resolved?: Array<{ name: string; value?: string | null; source: string }>;
   onClose: () => void;
 }
 
@@ -39,7 +44,19 @@ const jobLabel = (job: AgentJobState): string =>
   }[job.status]);
 
 export const SnippetRunModal = (props: Props): JSX.Element => {
-  const { snippet, site, inputs, onClose } = props;
+  const { snippet, site, onClose } = props;
+  const definitions = snippet.variables || [];
+  // Required values with nothing saved and no default are asked for here
+  const needed = definitions.filter(
+    def =>
+      def.required &&
+      def.type !== 'secret-ref' &&
+      !def.default &&
+      props.inputs[def.name] === undefined &&
+      !(props.resolved || []).some(item => item.name === def.name && item.source !== 'missing' && item.value)
+  );
+  const [prompted, setPrompted] = useState<Record<string, string>>({});
+  const inputs = { ...props.inputs, ...prompted };
   const { snippetRun } = useContext(AuthContext);
   const serverCan =
     snippetRun.enabled && snippetRun.languages.includes(snippet.language.toLowerCase());
@@ -47,6 +64,7 @@ export const SnippetRunModal = (props: Props): JSX.Element => {
   const [target, setTarget] = useState<string>(serverCan ? 'server' : site ? 'all' : 'server');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
+  const [held, setHeld] = useState<string | null>(null);
   const [serverResult, setServerResult] = useState<ServerResult | null>(null);
   const [jobs, setJobs] = useState<AgentJobState[]>([]);
   const poller = useRef<number | null>(null);
@@ -90,6 +108,21 @@ export const SnippetRunModal = (props: Props): JSX.Element => {
   };
 
   const run = async () => {
+    const problems = runValueProblems(
+      definitions,
+      Object.fromEntries(
+        definitions.map(def => [
+          def.name,
+          inputs[def.name] ??
+            ((props.resolved || []).find(item => item.name === def.name && item.source !== 'missing')?.value || '')
+        ])
+      )
+    );
+    if (problems.length) {
+      setError(problems.join('; '));
+      return;
+    }
+
     const where =
       target === 'server'
         ? 'the SnippyCode server'
@@ -101,8 +134,13 @@ export const SnippetRunModal = (props: Props): JSX.Element => {
       return;
     }
 
+    const reason = snippet.dangerous
+      ? window.prompt('This snippet is flagged dangerous and needs an admin to approve it. Why are you running it?') || ''
+      : '';
+
     setRunning(true);
     setError('');
+    setHeld(null);
     setServerResult(null);
     setJobs([]);
 
@@ -110,16 +148,30 @@ export const SnippetRunModal = (props: Props): JSX.Element => {
       if (target === 'server') {
         const res = await axios.post<Response<ServerResult>>(`/api/snippets/${snippet.id}/run`, {
           siteId: site?.id,
-          variables: inputs
+          variables: inputs,
+          reason
         });
+        const approval = heldApproval(res.data.data);
+        if (approval) {
+          setHeld(approvalMessage(approval));
+          setRunning(false);
+          return;
+        }
         setServerResult(res.data.data);
         setRunning(false);
       } else {
         const res = await axios.post<Response<{ jobs: AgentJobState[] }>>(`/api/snippets/${snippet.id}/run`, {
           siteId: site?.id,
           deviceIds: target === 'all' ? 'all' : [Number(target)],
-          variables: inputs
+          variables: inputs,
+          reason
         });
+        const approval = heldApproval(res.data.data);
+        if (approval) {
+          setHeld(approvalMessage(approval));
+          setRunning(false);
+          return;
+        }
         setJobs(res.data.data.jobs);
         pollJobs(res.data.data.jobs.map(job => job.id));
       }
@@ -188,7 +240,52 @@ export const SnippetRunModal = (props: Props): JSX.Element => {
         )}
         {site && <p className='form-text'>Uses {site.name} values, secrets included. Output is saved with secrets masked.</p>}
 
+        {needed.length > 0 && (
+          <div className='run-required-values mb-3'>
+            <p className='mb-1'>These values are required:</p>
+            {needed.map(def => (
+              <label key={def.name} className='form-label d-block'>
+                <span className='font-monospace'>{def.name}</span>
+                {def.description ? <span className='text-muted small'> · {def.description}</span> : null}
+                {def.type === 'choice' ? (
+                  <select
+                    className='form-select form-select-sm'
+                    value={prompted[def.name] || ''}
+                    onChange={e => setPrompted(current => ({ ...current, [def.name]: e.target.value }))}
+                  >
+                    <option value=''>Choose…</option>
+                    {(def.choices || []).map(choice => (
+                      <option key={choice}>{choice}</option>
+                    ))}
+                  </select>
+                ) : def.type === 'boolean' ? (
+                  <select
+                    className='form-select form-select-sm'
+                    value={prompted[def.name] || ''}
+                    onChange={e => setPrompted(current => ({ ...current, [def.name]: e.target.value }))}
+                  >
+                    <option value=''>Choose…</option>
+                    <option value='true'>true</option>
+                    <option value='false'>false</option>
+                  </select>
+                ) : (
+                  <input
+                    className='form-control form-control-sm'
+                    type={def.type === 'number' ? 'number' : 'text'}
+                    value={prompted[def.name] || ''}
+                    onChange={e => setPrompted(current => ({ ...current, [def.name]: e.target.value }))}
+                  />
+                )}
+              </label>
+            ))}
+          </div>
+        )}
         {error && <div className='alert alert-danger'>{error}</div>}
+        {held && (
+          <div className='alert alert-warning'>
+            {held} <Link to='/approvals'>See approvals</Link>
+          </div>
+        )}
 
         {serverResult && (
           <>

@@ -1,3 +1,4 @@
+import { cleanVariableDefinitions } from '../utils/snippetVariables';
 import { Request, Response, NextFunction } from 'express';
 import { ErrorResponse } from '../utils';
 
@@ -37,7 +38,8 @@ export const validateSnippetBody = (
     isPinned,
     collection,
     fileName,
-    isPublic
+    isPublic,
+    variables
   } = req.body;
 
   if (!isText(title) || !isText(language) || !isText(code)) {
@@ -113,6 +115,14 @@ export const validateSnippetBody = (
 
   if (isPublic !== undefined) {
     body.isPublic = Boolean(isPublic);
+  }
+
+  if (variables !== undefined) {
+    try {
+      body.variables = cleanVariableDefinitions(variables);
+    } catch (err) {
+      return next(new ErrorResponse(400, err instanceof Error ? err.message : 'Invalid variables'));
+    }
   }
 
   req.body = body;

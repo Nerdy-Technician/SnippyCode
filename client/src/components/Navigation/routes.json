@@ -29,6 +29,10 @@
       "dest": "/schedules"
     },
     {
+      "name": "Approvals",
+      "dest": "/approvals"
+    },
+    {
       "name": "Variables",
       "dest": "/variables"
     },
@@ -36,6 +40,10 @@
       "name": "Admin",
       "dest": "/admin",
       "minRole": "admin"
+    },
+    {
+      "name": "Help",
+      "dest": "/help/runbooks"
     },
     {
       "name": "About",

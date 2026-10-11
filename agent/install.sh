@@ -4,7 +4,13 @@
 #   curl -fsSL https://snippycode.example/agent/install.sh | sudo bash -s -- \
 #     --url https://snippycode.example --token sc_enroll_...
 #
+# The token can be single-use or a reusable bulk enrolment token: run the
+# same command on many machines and each gets its own device. Running it
+# again on a machine reuses that machine's device (matched by machine ID).
+#
 # Options: --name NAME  --allow-http  --uninstall
+#   --reset-id  delete and regenerate this machine's agent ID (e.g. after
+#               cloning a disk image), so it enrols as a new device
 # Update an installed agent in place (keeps its enrollment):
 #   curl -fsSL https://snippycode.example/agent/install.sh | sudo bash -s -- --upgrade
 set -euo pipefail
@@ -15,10 +21,11 @@ NAME=""
 ALLOW_HTTP="0"
 UNINSTALL="0"
 UPGRADE="0"
+RESET_ID="0"
 AGENT_VERSION="1.3.0"
-BIN="/usr/local/bin/snippycode-agent"
-CONFIG="/etc/snippycode-agent.conf"
-UNIT="/etc/systemd/system/snippycode-agent.service"
+BIN="${SNIPPYCODE_AGENT_BIN:-/usr/local/bin/snippycode-agent}"
+CONFIG="${SNIPPYCODE_AGENT_CONFIG:-/etc/snippycode-agent.conf}"
+UNIT="${SNIPPYCODE_AGENT_UNIT:-/etc/systemd/system/snippycode-agent.service}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -28,6 +35,7 @@ while [ $# -gt 0 ]; do
     --allow-http) ALLOW_HTTP="1"; shift ;;
     --uninstall) UNINSTALL="1"; shift ;;
     --upgrade) UPGRADE="1"; shift ;;
+    --reset-id) RESET_ID="1"; shift ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -89,20 +97,73 @@ curl -fsSL "$URL/agent/snippycode-agent.sh" -o "$BIN.tmp"
 chmod 755 "$BIN.tmp"
 mv "$BIN.tmp" "$BIN"
 
+MACHINE_ID=""
+for file in /etc/machine-id /var/lib/dbus/machine-id; do
+  if [ -r "$file" ]; then MACHINE_ID="$(tr -d '[:space:]' < "$file")"; break; fi
+done
+
+# Stable random agent ID, created once and kept across re-installs
+AGENT_ID_DIR="${SNIPPYCODE_AGENT_ID_DIR:-/etc/snippycode-agent}"
+AGENT_ID_FILE="$AGENT_ID_DIR/agent-id"
+AGENT_ID=""
+if [ "$RESET_ID" = "1" ]; then
+  echo "Resetting the agent ID"
+  rm -f "$AGENT_ID_FILE"
+fi
+if [ -r "$AGENT_ID_FILE" ]; then AGENT_ID="$(tr -dc 'a-f0-9-' < "$AGENT_ID_FILE")"; fi
+if [ "${#AGENT_ID}" -ne 36 ]; then
+  if [ -r /proc/sys/kernel/random/uuid ]; then
+    AGENT_ID="$(cat /proc/sys/kernel/random/uuid)"
+  else
+    AGENT_ID="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n' | sed 's/^\(.\{8\}\)\(.\{4\}\).\(.\{3\}\).\(.\{3\}\)\(.\{12\}\).*/\1-\2-4\3-a\4-\5/')"
+  fi
+  mkdir -p "$AGENT_ID_DIR"
+  chmod 700 "$AGENT_ID_DIR"
+  (umask 077 && printf '%s\n' "$AGENT_ID" > "$AGENT_ID_FILE")
+fi
+chmod 600 "$AGENT_ID_FILE"
+
+# Hardware fingerprint: sha256 of machine ID, sorted physical MACs and the
+# board serial where readable. Only the hash ever leaves this machine.
+hardware_fingerprint() {
+  local mid="" macs="" serial="" iface
+  for f in /etc/machine-id /var/lib/dbus/machine-id; do
+    if [ -r "$f" ]; then mid="$(tr -d '[:space:]' < "$f")"; break; fi
+  done
+  for iface in /sys/class/net/*; do
+    [ -e "$iface/device" ] && [ -r "$iface/address" ] || continue
+    macs="$macs$(tr -d '[:space:]' < "$iface/address" | tr 'A-F' 'a-f')"$'\n'
+  done
+  macs="$(printf '%s' "$macs" | sort -u | tr '\n' ',')"
+  if [ -r /sys/class/dmi/id/product_serial ]; then serial="$(tr -d '[:space:]' < /sys/class/dmi/id/product_serial)"; fi
+  printf '%s|%s|%s' "$mid" "$macs" "$serial" | sha256sum | cut -d' ' -f1
+}
+FINGERPRINT="$(hardware_fingerprint)"
+
 echo "Enrolling $(hostname)"
 response="$(curl -fsS -X POST "$URL/api/agent/enroll?format=env" \
+  -H "X-Agent-Fingerprint: $FINGERPRINT" \
   --data-urlencode "token=$TOKEN" \
   --data-urlencode "hostname=$(hostname)" \
+  --data-urlencode "machineId=$MACHINE_ID" \
+  --data-urlencode "agentId=$AGENT_ID" \
   --data-urlencode "name=${NAME:-$(hostname)}" \
   --data-urlencode "os=linux" \
   --data-urlencode "arch=$(uname -m)" \
   --data-urlencode "version=$AGENT_VERSION")" || {
-  echo "Enrollment failed. The token may be expired or already used." >&2
+  echo "Enrollment failed. The token may be expired, revoked or used up." >&2
   exit 1
 }
 
 DEVICE_TOKEN="$(printf '%s\n' "$response" | sed -n 's/^DEVICE_TOKEN=//p')"
 SITE="$(printf '%s\n' "$response" | sed -n 's/^SITE=//p')"
+NEW_AGENT_ID="$(printf '%s\n' "$response" | sed -n 's/^AGENT_ID=//p' | tr -dc 'a-f0-9-')"
+# A clone gets a fresh agent ID from the server: keep it from now on
+if [ "${#NEW_AGENT_ID}" -eq 36 ] && [ "$NEW_AGENT_ID" != "$AGENT_ID" ]; then
+  echo "This machine looks like a clone; it was given its own agent ID."
+  (umask 077 && printf '%s\n' "$NEW_AGENT_ID" > "$AGENT_ID_FILE")
+  AGENT_ID="$NEW_AGENT_ID"
+fi
 
 if [ -z "$DEVICE_TOKEN" ]; then
   echo "Enrollment did not return a device token." >&2

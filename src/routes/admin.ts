@@ -7,6 +7,10 @@ import {
   generateRawApiKey,
   getAdminOverview,
   exportLibraryJson,
+  getGithubSync,
+  updateGithubSync,
+  runGithubSyncNow,
+  resolveGithubSyncConflict,
   importLibraryJson,
   importSnippetBox,
   revokeRawApiKey,
@@ -46,6 +50,9 @@ adminRouter.route('/github').put(updateGithubSettings);
 adminRouter.route('/github/test').post(testGithubSettings);
 adminRouter.route('/github/upload').post(uploadSnippetsToGithub);
 adminRouter.route('/github/download').post(downloadSnippetsFromGithub);
+adminRouter.route('/github/sync').get(getGithubSync).put(updateGithubSync);
+adminRouter.route('/github/sync/run').post(runGithubSyncNow);
+adminRouter.route('/github/sync/conflicts/:id').post(resolveGithubSyncConflict);
 adminRouter.route('/raw-api-key').post(generateRawApiKey).delete(revokeRawApiKey);
 adminRouter.route('/export').get(exportLibraryJson);
 adminRouter.route('/import/snippet-box').post(importSnippetBox);

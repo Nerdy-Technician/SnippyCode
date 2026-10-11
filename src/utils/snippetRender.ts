@@ -1,8 +1,9 @@
 import { SnippetRunModel, SnippetRunInstance } from '../models';
-import { findTemplateVariables, renderTemplate } from './templateVars';
+import { findTemplateVariables, renderTemplateSafe, TemplateValueError } from './templateVars';
 import { loadVariableLayers } from './variableValues';
 import { maskSecrets } from './secretBox';
 import { runSnippetCode } from './runSnippet';
+import { applyDefinitions, missingRequired, typeError, VariableDefinition } from './snippetVariables';
 
 export interface RenderedSnippet {
   code: string;
@@ -12,6 +13,10 @@ export interface RenderedSnippet {
   secretsUsed: string[];
   /** Placeholders left without a value */
   missing: string[];
+  /** Values that do not fit their variable's type */
+  errors: string[];
+  /** Required variables still without a value */
+  missingRequired: string[];
 }
 
 /**
@@ -27,6 +32,10 @@ export const renderSnippetFor = async (options: {
   deviceValues?: Record<string, string>;
   includeTeam?: boolean;
   includeSecrets: boolean;
+  /** The snippet's variable definitions: types, defaults, required, references */
+  definitions?: VariableDefinition[];
+  /** The snippet's language: values are quoted for it (see renderTemplateSafe) */
+  language?: string | null;
 }): Promise<RenderedSnippet> => {
   const layers = await loadVariableLayers({
     userId: options.userId,
@@ -34,7 +43,17 @@ export const renderSnippetFor = async (options: {
     includeTeam: options.includeTeam,
     includeSecrets: options.includeSecrets
   });
-  const explicit = options.explicit || {};
+  // Raw queries hand back the stored JSON text; anything unreadable means no definitions
+  let definitions: VariableDefinition[] = [];
+  const given: unknown = options.definitions;
+  try {
+    const list = typeof given === 'string' ? JSON.parse(given) : given;
+    definitions = Array.isArray(list) ? list : [];
+  } catch {
+    definitions = [];
+  }
+  const applied = applyDefinitions(definitions, options.explicit || {});
+  const explicit = applied.explicit;
   const device = options.deviceValues || {};
   const [saved] = layers.sources;
   // Personal values win over device ones; device values over site and team
@@ -44,17 +63,50 @@ export const renderSnippetFor = async (options: {
       merged[name] = value;
     }
   });
-  const code = renderTemplate(options.code, explicit, merged);
+  // secret-ref variables read the saved variable they point at
+  const referenced: Record<string, string> = {};
+  Object.entries(applied.aliases).forEach(([name, ref]) => {
+    if (merged[ref] !== undefined) referenced[name] = merged[ref];
+  });
+  // Every value is type-checked and inserted as one quoted literal for the
+  // language, unless an admin marked its definition raw
+  const byName = new Map(definitions.map(def => [def.name, def]));
+  let code = options.code;
+  const renderErrors: string[] = [];
+  try {
+    code = renderTemplateSafe(
+      options.code,
+      {
+        language: options.language,
+        raw: definitions.filter(def => def.raw).map(def => def.name),
+        check: (name, value) => {
+          const def = byName.get(name);
+          return def ? typeError(def, value) : null;
+        }
+      },
+      referenced,
+      explicit,
+      merged,
+      applied.defaults
+    );
+  } catch (err) {
+    if (!(err instanceof TemplateValueError)) throw err;
+    renderErrors.push(err.message);
+  }
   const used = findTemplateVariables(options.code).map(variable => variable.name);
+  const usedRefs = used.map(name => applied.aliases[name] || name);
   const secretsUsed = layers.secretNames.filter(
-    name => used.includes(name) && explicit[name] === undefined
+    name => usedRefs.includes(name) && explicit[name] === undefined
   );
+  const unresolved = findTemplateVariables(code).map(variable => variable.name);
 
   return {
     code,
     secretValues: layers.secretValues,
     secretsUsed,
-    missing: findTemplateVariables(code).map(variable => variable.name)
+    missing: unresolved,
+    errors: [...applied.errors, ...renderErrors],
+    missingRequired: missingRequired(definitions, unresolved)
   };
 };
 

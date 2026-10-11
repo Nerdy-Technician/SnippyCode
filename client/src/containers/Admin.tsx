@@ -13,7 +13,9 @@ import {
 } from '@fortawesome/free-solid-svg-icons';
 import { AdminNotifications } from '../components/Admin/AdminNotifications';
 import { AdminSystem } from '../components/Admin/AdminSystem';
+import { AgentRollout } from '../components/Admin/AgentRollout';
 import { Button, Card, Layout, PageHeader } from '../components/UI';
+import { GithubAutoSync } from '../components/Admin/GithubAutoSync';
 import { AuthContext } from '../store';
 import { Response, Task } from '../typescript/interfaces';
 import {
@@ -779,7 +781,14 @@ export const Admin = (): JSX.Element => {
         </div>
 
         {activeTab === 'notifications' && <AdminNotifications />}
-        {activeTab === 'system' && <AdminSystem />}
+        {activeTab === 'system' && (
+          <>
+            <AdminSystem />
+            <Card classes='variables-card'>
+              <AgentRollout />
+            </Card>
+          </>
+        )}
 
         {activeTab === 'github' && (
           <Card classes='task-panel admin-tab-panel'>
@@ -790,6 +799,7 @@ export const Admin = (): JSX.Element => {
                 <h5 className='card-title'>Private GitHub sync</h5>
               </div>
             </div>
+            <GithubAutoSync />
             <form onSubmit={saveGithub}>
               <div className='row g-3'>
                 <div className='col-12 col-md-6'>

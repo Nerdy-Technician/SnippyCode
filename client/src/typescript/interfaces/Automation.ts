@@ -17,7 +17,18 @@ export interface Device {
   factsAt: string | null;
   latestAgentVersion: string;
   updateAvailable: boolean;
+  /** Stable agent ID (UUID) sent by the agent; null for older agents */
+  agentId?: string | null;
+  /** Hint only: shares hostname/OS/arch or machine ID with other devices */
+  possibleDuplicate?: boolean;
+  /** Self-enrolled clone waiting for an admin; it gets no jobs until approved */
+  clonePendingApproval?: boolean;
+  status?: 'active' | 'pending_approval' | 'revoked';
+  clonedFrom?: number | null;
+  fingerprintPendingReview?: boolean;
+  duplicateOf?: number[];
   lastRun: { id: number; snippetTitle: string; ok: boolean; createdAt: string } | null;
+  tags?: string[];
 }
 
 export interface DeviceFacts {
@@ -33,10 +44,29 @@ export interface DeviceFacts {
   timezone?: string;
 }
 
-export interface Enrollment {
-  token: string;
+export type EnrollmentStatus = 'active' | 'expired' | 'used' | 'revoked';
+
+/** An enrolment token as listed (the token itself is never listed) */
+export interface EnrollmentToken {
+  id: number;
+  siteId: number;
+  site: { id: number; name: string } | null;
+  label: string;
+  allowReenrol: boolean;
+  tokenPrefix: string;
+  /** null = unlimited until it expires or is revoked */
+  maxUses: number | null;
+  uses: number;
   expiresAt: string;
-  maxUses: number;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+  status: EnrollmentStatus;
+}
+
+/** Returned once, when a token is created */
+export interface Enrollment extends EnrollmentToken {
+  token: string;
   linux: string;
   windows: string;
 }
@@ -53,7 +83,7 @@ export interface AgentJobState {
   run: SnippetRunRecord | null;
 }
 
-export type ScheduleSiteMode = 'none' | 'sites' | 'tag' | 'all' | 'policy';
+export type ScheduleSiteMode = 'none' | 'sites' | 'tag' | 'all' | 'policy' | 'devices';
 
 export interface Schedule {
   id: number;
@@ -68,6 +98,11 @@ export interface Schedule {
   siteIds: number[];
   siteNames: string[];
   siteTag: string;
+  deviceIds: number[];
+  deviceTag: string;
+  variables?: Record<string, string>;
+  deviceTagIds?: number[];
+  deviceTags?: Array<{ id: number; name: string; color: string | null }>;
   policyId: number | null;
   policyName: string | null;
   runOn: 'server' | 'devices';
@@ -81,13 +116,36 @@ export interface Schedule {
 
 export interface ScheduleRunSummary {
   id: number;
-  status: 'running' | 'succeeded' | 'failed' | 'attention';
+  status: 'running' | 'succeeded' | 'failed' | 'attention' | 'missed';
   trigger: 'schedule' | 'manual';
   createdAt: string;
   finishedAt: string | null;
   pendingJobs: number;
   results: SnippetRunRecord[];
   runbookRuns: { id: number; status: string; site: string | null }[];
+}
+
+export interface ScheduleDeviceResult {
+  deviceId: number;
+  deviceName: string;
+  site: string | null;
+  kind: 'snippet' | 'runbook';
+  status: string;
+  ok: boolean | null;
+  exitCode: number | null;
+  timedOut: boolean;
+  stdout: string;
+  stderr: string;
+  snippetRunId?: number | null;
+  runbookRunId?: number;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface ScheduleRunDevices {
+  id: number;
+  status: string;
+  devices: ScheduleDeviceResult[];
 }
 
 export interface ScheduleDetail extends Schedule {

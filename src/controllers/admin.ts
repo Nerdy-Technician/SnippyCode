@@ -9,7 +9,8 @@ import {
   SnippetModel,
   TagModel,
   TaskModel,
-  UserModel
+  UserModel,
+  GithubSyncRunModel
 } from '../models';
 import {
   ErrorResponse,
@@ -23,7 +24,14 @@ import {
   tagParser,
   testGithubRepositoryAccess,
   upsertGithubFile,
-  fetchSnippetBoxSnippets
+  fetchSnippetBoxSnippets,
+  GithubSyncSettings,
+  SYNC_INTERVALS,
+  getSyncSettings,
+  listGithubConflicts,
+  resolveGithubConflict,
+  runGithubSync,
+  saveSyncSettings
 } from '../utils';
 import {
   createRawApiKey,
@@ -970,11 +978,19 @@ export const uploadSnippetsToGithub = asyncWrapper(
         );
       }
 
+      // Snippets and runbooks also go up in the auto-sync layout
+      // (.snippycode-sync/), with the same never-overwrite conflict checks
+      const sync =
+        !dryRun && selectedIds.length === 0
+          ? await runGithubSync({ trigger: 'manual', direction: 'upload' })
+          : null;
+
       await task.update({
         status: 'done',
         description: dryRun
           ? `Dry run planned ${plannedFiles.length} files from ${snippets.length} snippets.`
-          : `Uploaded ${snippets.length} snippets, wrote ${files.length} files, skipped ${skipped.length}.`
+          : `Uploaded ${snippets.length} snippets, wrote ${files.length} files, skipped ${skipped.length}.` +
+            (sync ? ` Sync layout: ${sync.status}, ${sync.uploaded} item(s) incl. runbooks, ${sync.conflicts} conflict(s).` : '')
       });
       await auditLog('github.upload.done', {
         ...auditActor(req),
@@ -995,7 +1011,8 @@ export const uploadSnippetsToGithub = asyncWrapper(
           dryRun,
           files,
           skipped,
-          secretWarnings
+          secretWarnings,
+          sync
         }
       });
     } catch (err) {
@@ -1033,10 +1050,17 @@ export const downloadSnippetsFromGithub = asyncWrapper(
     });
 
     try {
+      // Items in the auto-sync layout (snippets and runbooks) first: conflict
+      // safe, backed up before anything changes, nothing duplicated
+      const sync = await runGithubSync({ trigger: 'manual', direction: 'download' });
+      if (sync.status === 'failed') {
+        throw new Error(sync.error || 'GitHub download failed');
+      }
+
       const directories = await getGithubDirectory(settings.path, settings);
       let imported = 0;
 
-      for (const directory of directories.filter(item => item.type === 'dir')) {
+      for (const directory of directories.filter(item => item.type === 'dir' && !item.name.startsWith('.'))) {
         const files = await getGithubDirectory(directory.path, settings);
         const codeFile = files.find(
           file => file.type === 'file' && file.name !== 'README.md'
@@ -1050,6 +1074,12 @@ export const downloadSnippetsFromGithub = asyncWrapper(
         const language = languageForFile(codeFile.name);
         const title = directory.name.replace(/-/g, ' ');
         const parsedTags = tagParser([language, 'github']);
+
+        // Legacy layout: skip what is already here instead of duplicating it
+        if (await SnippetModel.findOne({ where: { title, code } })) {
+          continue;
+        }
+
         const snippet = await SnippetModel.create({
           title,
           description: `Imported from GitHub path ${codeFile.path}`,
@@ -1064,12 +1094,12 @@ export const downloadSnippetsFromGithub = asyncWrapper(
 
       await task.update({
         status: 'done',
-        description: `Imported ${imported} snippets from GitHub.`
+        description: `Imported ${imported} snippets from GitHub (legacy layout); sync layout: ${sync.status}, ${sync.downloaded} item(s) incl. runbooks, ${sync.conflicts} conflict(s).`
       });
       await auditLog('github.download.done', {
         ...auditActor(req),
         target: 'github',
-        metadata: { imported }
+        metadata: { imported, sync }
       });
 
       res.status(200).json({ data: task });
@@ -1110,6 +1140,7 @@ export const exportLibraryJson = asyncWrapper(
         isPinned: Boolean(raw.isPinned),
         collection: raw.collection,
         fileName: raw.fileName,
+        variables: raw.variables || [],
         tags: raw.tags?.map(tag => tag.name) || []
       };
     });
@@ -1227,3 +1258,115 @@ export const importSnippetBox = asyncWrapper(
     }
   }
 );
+
+// Automatic GitHub sync ---------------------------------------------------------
+
+const publicSyncSettings = (settings: GithubSyncSettings) => ({
+  uploadEnabled: settings.uploadEnabled,
+  downloadEnabled: settings.downloadEnabled,
+  intervalMinutes: settings.intervalMinutes,
+  intervals: SYNC_INTERVALS,
+  lastRunAt: settings.lastRunAt,
+  lastStatus: settings.lastStatus,
+  lastError: settings.lastError,
+  failures: settings.failures,
+  nextAttemptAt: settings.uploadEnabled || settings.downloadEnabled ? settings.nextAttemptAt : null
+});
+
+/**
+ * @description Auto-sync settings, status, recent runs and open conflicts (owners)
+ * @route /api/admin/github/sync
+ * @request GET
+ */
+export const getGithubSync = asyncWrapper(async (_req: Request, res: Response): Promise<void> => {
+  const [settings, runs, conflicts] = await Promise.all([
+    getSyncSettings(),
+    GithubSyncRunModel.findAll({ order: [['id', 'DESC']], limit: 20 }),
+    listGithubConflicts()
+  ]);
+
+  res.status(200).json({ data: { settings: publicSyncSettings(settings), runs, conflicts } });
+});
+
+/**
+ * @description Turn auto-upload / auto-download on or off and set the interval (owners)
+ * @route /api/admin/github/sync
+ * @request PUT
+ */
+export const updateGithubSync = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
+  const current = await getSyncSettings();
+  const interval = Number(req.body?.intervalMinutes);
+  const next: GithubSyncSettings = {
+    ...current,
+    uploadEnabled: req.body?.uploadEnabled === undefined ? current.uploadEnabled : req.body.uploadEnabled === true,
+    downloadEnabled: req.body?.downloadEnabled === undefined ? current.downloadEnabled : req.body.downloadEnabled === true,
+    intervalMinutes: SYNC_INTERVALS.includes(interval) ? interval : current.intervalMinutes
+  };
+
+  if (req.body?.intervalMinutes !== undefined && !SYNC_INTERVALS.includes(interval)) {
+    throw new ErrorResponse(400, `Interval must be one of ${SYNC_INTERVALS.join(', ')} minutes`);
+  }
+
+  // Turning sync on (or changing the interval) starts a fresh schedule
+  if (
+    next.uploadEnabled !== current.uploadEnabled ||
+    next.downloadEnabled !== current.downloadEnabled ||
+    next.intervalMinutes !== current.intervalMinutes
+  ) {
+    next.failures = 0;
+    next.nextAttemptAt = null;
+  }
+
+  await saveSyncSettings(next);
+  await auditLog('github.sync.settings_updated', {
+    ...auditActor(req),
+    target: 'github',
+    metadata: {
+      before: { uploadEnabled: current.uploadEnabled, downloadEnabled: current.downloadEnabled, intervalMinutes: current.intervalMinutes },
+      after: { uploadEnabled: next.uploadEnabled, downloadEnabled: next.downloadEnabled, intervalMinutes: next.intervalMinutes }
+    }
+  });
+
+  res.status(200).json({ data: publicSyncSettings(next) });
+});
+
+/**
+ * @description Run a two-way sync now (owners)
+ * @route /api/admin/github/sync/run
+ * @request POST
+ */
+export const runGithubSyncNow = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
+  const result = await runGithubSync({ trigger: 'manual' });
+  await auditLog('github.sync.ran', { ...auditActor(req), target: 'github', metadata: { ...result } });
+
+  if (result.status === 'busy') {
+    throw new ErrorResponse(409, 'A sync is already running');
+  }
+
+  res.status(200).json({ data: result });
+});
+
+/**
+ * @description Resolve a sync conflict: keep local, remote, or both (owners)
+ * @route /api/admin/github/sync/conflicts/:id
+ * @request POST
+ */
+export const resolveGithubSyncConflict = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
+  const keep = ['local', 'remote', 'both'].includes(req.body?.keep) ? req.body.keep : null;
+
+  if (!keep) {
+    throw new ErrorResponse(400, 'Choose local, remote or both');
+  }
+
+  try {
+    const state = await resolveGithubConflict(Number(req.params.id) || -1, keep);
+    await auditLog('github.sync.conflict_resolved', {
+      ...auditActor(req),
+      target: `${state.itemType}:${state.itemId}`,
+      metadata: { keep, syncId: state.syncId }
+    });
+    res.status(200).json({ data: { id: state.id, keep } });
+  } catch (err) {
+    throw new ErrorResponse(400, err instanceof Error ? err.message : 'Could not resolve the conflict');
+  }
+});

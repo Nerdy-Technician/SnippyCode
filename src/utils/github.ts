@@ -173,7 +173,7 @@ export const getGithubDirectory = async (
     repo?: string;
     branch?: string;
   }
-): Promise<Array<{ name: string; path: string; type: 'file' | 'dir' }>> => {
+): Promise<Array<{ name: string; path: string; type: 'file' | 'dir'; sha?: string }>> => {
   const owner = config.owner || process.env.GITHUB_REPO_OWNER;
   const repo = config.repo || process.env.GITHUB_REPO_NAME;
   const branch = config.branch || process.env.GITHUB_REPO_BRANCH || 'main';
@@ -182,13 +182,91 @@ export const getGithubDirectory = async (
     throw new Error('GITHUB_REPO_OWNER and GITHUB_REPO_NAME are required');
   }
 
-  return requestGithub({
+  const entries = await requestGithub<GithubDirEntry[]>({
     method: 'GET',
     token: config.token,
     path: `/repos/${owner}/${repo}/contents/${encodePath(
       directoryPath
     )}?ref=${encodeURIComponent(branch)}`
   });
+
+  // The contents API stops at 1,000 entries; list bigger folders from the
+  // git tree of the branch head instead
+  if (!Array.isArray(entries) || entries.length < CONTENTS_LIMIT) {
+    return entries;
+  }
+
+  return listDirectoryFromTree(directoryPath, { token: config.token, owner, repo, branch });
+};
+
+type GithubDirEntry = { name: string; path: string; type: 'file' | 'dir'; sha?: string };
+export interface GitTreeItem { path: string; type: string; sha: string }
+interface GitTree { sha: string; tree: GitTreeItem[]; truncated: boolean }
+
+export const CONTENTS_LIMIT = 1000;
+
+const trimSlashes = (path: string) => path.replace(/^\/+|\/+$/g, '');
+
+/** Direct children of `dir` from a (recursive) git tree listing. */
+export const directoryEntriesFromTree = (dir: string, items: GitTreeItem[], prefix = ''): GithubDirEntry[] => {
+  const base = trimSlashes(dir);
+  const root = trimSlashes(prefix);
+
+  return items
+    .map(item => ({ ...item, path: root ? `${root}/${item.path}` : item.path }))
+    .filter(item => {
+      const parent = item.path.includes('/') ? item.path.slice(0, item.path.lastIndexOf('/')) : '';
+      return parent === base && (item.type === 'blob' || item.type === 'tree');
+    })
+    .map(item => ({
+      name: item.path.slice(item.path.lastIndexOf('/') + 1),
+      path: item.path,
+      type: item.type === 'tree' ? 'dir' : 'file',
+      sha: item.sha
+    }));
+};
+
+/**
+ * List a folder through the git trees API: resolve the branch SHA, fetch the
+ * recursive tree, and when GitHub truncates it, walk down to the folder and
+ * read just its own (non-recursive) tree.
+ */
+const listDirectoryFromTree = async (
+  directoryPath: string,
+  config: { token?: string; owner: string; repo: string; branch: string }
+): Promise<GithubDirEntry[]> => {
+  const { owner, repo, branch, token } = config;
+  const ref = await requestGithub<{ object: { sha: string } }>({
+    method: 'GET',
+    token,
+    path: `/repos/${owner}/${repo}/git/ref/heads/${encodePath(branch)}`
+  });
+  const getTree = (sha: string, recursive: boolean) =>
+    requestGithub<GitTree>({
+      method: 'GET',
+      token,
+      path: `/repos/${owner}/${repo}/git/trees/${sha}${recursive ? '?recursive=1' : ''}`
+    });
+  const full = await getTree(ref.object.sha, true);
+
+  if (!full.truncated) {
+    return directoryEntriesFromTree(directoryPath, full.tree);
+  }
+
+  let tree = await getTree(ref.object.sha, false);
+  const parts = trimSlashes(directoryPath).split('/').filter(Boolean);
+
+  for (const part of parts) {
+    const next = tree.tree.find(item => item.type === 'tree' && item.path === part);
+
+    if (!next) {
+      return [];
+    }
+
+    tree = await getTree(next.sha, false);
+  }
+
+  return directoryEntriesFromTree(directoryPath, tree.tree, directoryPath);
 };
 
 export const getGithubFileText = async (

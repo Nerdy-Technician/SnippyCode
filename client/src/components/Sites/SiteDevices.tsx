@@ -79,9 +79,29 @@ export const SiteDevices = (props: Props): JSX.Element => {
   };
 
   const revoke = async (device: Device) => {
-    if (window.confirm(`Revoke ${device.name}? Its agent stops working until it is enrolled again.`)) {
-      await axios.delete(`/api/devices/${device.id}`);
-      reload();
+    if (!window.confirm(`Revoke ${device.name}? Its agent stops working until it is enrolled again. Clones still waiting for approval are revoked with it.`)) {
+      return;
+    }
+    // Approved clones keep their own access unless you revoke them too
+    // (do, if this device was compromised)
+    const approvedClones = (devices || []).filter(other => other.clonedFrom === device.id && !other.clonePendingApproval);
+    const revokeClones =
+      approvedClones.length > 0 &&
+      window.confirm(
+        `Also revoke ${approvedClones.length} approved clone(s) of ${device.name} (${approvedClones.map(clone => clone.name).join(', ')})? Choose OK if the device was compromised.`
+      );
+    await axios.delete(`/api/devices/${device.id}`, { data: { revokeClones } });
+    reload();
+  };
+
+  const clearDuplicate = async (device: Device) => {
+    if (window.confirm(`Clear the possible-duplicate flag on ${device.name}?`)) {
+      try {
+        await axios.post(`/api/devices/${device.id}/clear-duplicate`);
+        reload();
+      } catch (err) {
+        setError(apiError(err, 'Could not clear the duplicate flag.'));
+      }
     }
   };
 
@@ -137,7 +157,7 @@ export const SiteDevices = (props: Props): JSX.Element => {
                 </div>
               ) : (
                 <span className='form-text'>
-                  Valid for {enrollment.maxUses === 1 ? 'one device' : `${enrollment.maxUses} devices`} until{' '}
+                  Valid for {enrollment.maxUses === 1 ? 'one device' : enrollment.maxUses === null ? 'any number of devices' : `${enrollment.maxUses} devices`} until{' '}
                   {dateParser(enrollment.expiresAt).formatted}. Shown only once.
                 </span>
               )}
@@ -215,6 +235,7 @@ export const SiteDevices = (props: Props): JSX.Element => {
               onHistory={item => setDialog({ device: item, mode: 'history' })}
               onRename={rename}
               onRevoke={revoke}
+              onClearDuplicate={clearDuplicate}
             />
           ))}
         </div>

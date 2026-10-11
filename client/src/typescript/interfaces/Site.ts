@@ -8,6 +8,8 @@ export interface Site {
   tags: string[];
   access: SiteAccess;
   memberIds?: number[];
+  /** Members who may manage this site's enrolment tokens */
+  adminIds?: number[];
   variableCount?: number;
   lastRunAt?: string | null;
   deviceCount?: number;

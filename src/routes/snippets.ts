@@ -15,6 +15,8 @@ import {
   revokeSnippetRawToken,
   renameCollection,
   runSnippet,
+  setSnippetDangerous,
+  getVariableSources,
   searchSnippets,
   assistSnippet,
   recordSnippetActivity,
@@ -60,6 +62,7 @@ snippetRouter
   .route('/collections/rename')
   .post(requireAuth, requireMinimumRole('editor'), renameCollection);
 snippetRouter.route('/runner').get(requireAuth, getSnippetRunner);
+snippetRouter.route('/variable-sources').get(requireAuth, getVariableSources);
 snippetRouter
   .route('/lint')
   .get(requireAuth, getLintTools)
@@ -99,6 +102,10 @@ snippetRouter
 snippetRouter
   .route('/:id/versions/:versionId/restore')
   .post(requireAuth, validateSnippetId, requireMinimumRole('editor'), restoreSnippetVersion);
+
+snippetRouter
+  .route('/:id/dangerous')
+  .put(requireAuth, validateSnippetId, requireMinimumRole('editor'), setSnippetDangerous);
 
 snippetRouter
   .route('/:id/run')

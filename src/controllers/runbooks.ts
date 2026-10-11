@@ -25,8 +25,20 @@ import {
   afterRunbookStep,
   executeRunbookStep,
   requestIp,
-  startRunbookRun as beginRunbookRun
+  cleanStepValues,
+  startRunbookRun as beginRunbookRun,
+  approvalJson,
+  approvalReasons,
+  assertApprovalFresh,
+  contentHash,
+  approvedRunId,
+  getApprovalSettings,
+  isAdminRole,
+  registerApprovalExecutor,
+  replayHandler,
+  requestApproval
 } from '../utils';
+import { runbookContent } from '../utils/scheduler';
 import { describeRuns } from './runs';
 
 const MAX_STEPS = 100;
@@ -41,6 +53,7 @@ interface StepInput {
   snippetId: number | null;
   title: string;
   note: string;
+  values: Record<string, string>;
 }
 
 const readRunbook = (
@@ -65,7 +78,8 @@ const readRunbook = (
     id: Number(step.id) || undefined,
     snippetId: Number(step.snippetId) || null,
     title: String(step.title || '').trim().slice(0, 200),
-    note: String(step.note || '').slice(0, 5000)
+    note: String(step.note || '').slice(0, 5000),
+    values: cleanStepValues(step.values)
   }));
 
   if (steps.some(step => !step.snippetId && !step.title)) {
@@ -89,7 +103,7 @@ const stepsFor = async (runbookId: number) => {
   const snippets = snippetIds.length
     ? await SnippetModel.findAll({
         where: { id: snippetIds },
-        attributes: ['id', 'title', 'language', 'code']
+        attributes: ['id', 'title', 'language', 'code', 'variables']
       })
     : [];
 
@@ -102,8 +116,9 @@ const stepsFor = async (runbookId: number) => {
       snippetId: step.snippetId,
       title: step.title,
       note: step.note,
+      values: step.values || {},
       snippet: snippet
-        ? { id: snippet.id, title: snippet.title, language: snippet.language }
+        ? { id: snippet.id, title: snippet.title, language: snippet.language, variables: snippet.variables }
         : null
     };
   });
@@ -132,7 +147,8 @@ const saveSteps = async (runbookId: number, steps: StepInput[]) => {
         position,
         snippetId: step.snippetId,
         title: step.title,
-        note: step.note
+        note: step.note,
+        values: JSON.stringify(step.values || {}) as any
       };
 
       if (step.id && keep.has(step.id)) {
@@ -247,6 +263,7 @@ export const getRunbooks = asyncWrapper(
         id: runbook.id,
         title: runbook.title,
         description: runbook.description,
+        dangerous: runbook.dangerous,
         stepCount: steps.filter(step => step.runbookId === runbook.id).length,
         updatedAt: runbook.updatedAt,
         lastRun: latest.find(run => run.runbookId === runbook.id) || null
@@ -378,12 +395,43 @@ export const startRunbookRun = asyncWrapper(
     // A device must be enrolled at the chosen site
     const device = req.body?.deviceId
       ? await DeviceModel.findOne({
-          where: { id: Number(req.body.deviceId) || -1, siteId: site?.id || -1, revokedAt: null }
+          where: { id: Number(req.body.deviceId) || -1, siteId: site?.id || -1, revokedAt: null, clonePendingApproval: false }
         })
       : null;
 
     if (req.body?.deviceId && !device) {
       return next(new ErrorResponse(404, 'Device was not found at this site'));
+    }
+
+    // Dangerous runbooks (flagged, or with a dangerous snippet) wait for an admin
+    const content = await runbookContent(runbook);
+    const hash = contentHash({ kind: 'runbook', id: runbook.id, steps: content.steps, siteId: site?.id || null, deviceId: device?.id || null });
+    const approved = approvedRunId(req);
+    if (approved) await assertApprovalFresh(approved, hash);
+    if (!approved) {
+      // A runbook run reaches one machine: the chosen device, or the server
+      const why = approvalReasons({ dangerous: content.dangerous, targetCount: 1 }, await getApprovalSettings());
+
+      if (why.length) {
+        const approval = await requestApproval({
+          kind: 'runbook',
+          title: runbook.title,
+          why,
+          requestedBy: req.user?.id || null,
+          reason: req.body?.reason,
+          runbookId: runbook.id,
+          siteId: site?.id || null,
+          targets: [device ? { type: 'device', id: device.id, name: device.name } : { type: 'site', id: site?.id || null, name: site?.name || 'No site' }],
+          targetCount: 1,
+          payload: { siteId: req.body?.siteId, deviceId: req.body?.deviceId },
+          ipAddress: requestIp(req),
+          contentHash: hash,
+          contentPreview: content.preview,
+          siteIds: site ? [site.id] : []
+        });
+        res.status(202).json({ data: { approval: approvalJson(approval) } });
+        return;
+      }
     }
 
     let run: RunbookRunInstance;
@@ -625,3 +673,45 @@ export const cancelRunbookRun = asyncWrapper(
     res.status(200).json({ data: await runDetail(run) });
   }
 );
+
+/**
+ * @description Flag a runbook as dangerous (its runs need approval).
+ * Editors can set the flag; only admins can clear it.
+ * @route /api/runbooks/:id/dangerous
+ * @request PUT
+ */
+export const setRunbookDangerous = asyncWrapper(
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+    const runbook = await findRunbook(req, next);
+
+    if (!runbook) {
+      return;
+    }
+
+    const dangerous = Boolean(req.body?.dangerous);
+    if (!dangerous && runbook.dangerous && !isAdminRole(req.user?.role)) {
+      return next(new ErrorResponse(403, 'Only admins can clear the dangerous flag'));
+    }
+
+    if (dangerous !== runbook.dangerous) {
+      await runbook.update({ dangerous });
+      await auditLog(dangerous ? 'runbook.flagged_dangerous' : 'runbook.unflagged_dangerous', {
+        ...auditActor(req),
+        target: `runbook:${runbook.id}`,
+        metadata: { title: runbook.title }
+      });
+    }
+
+    res.status(200).json({ data: { id: runbook.id, dangerous } });
+  }
+);
+
+registerApprovalExecutor('runbook', async (approval, payload, requester) => {
+  const { body } = await replayHandler(startRunbookRun, {
+    params: { id: String(approval.runbookId) },
+    body: payload,
+    user: requester,
+    approvalId: approval.id
+  });
+  return `Runbook run #${body?.data?.id} started`;
+});

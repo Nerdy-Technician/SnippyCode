@@ -1,3 +1,4 @@
+import type { VariableDefinition } from '../../utils/snippetVariables';
 import { Model } from '.';
 import { Optional } from 'sequelize';
 
@@ -15,8 +16,10 @@ export interface Snippet extends Model {
   collection: string;
   fileName?: string | null;
   isPublic: boolean;
+  variables: VariableDefinition[];
+  dangerous: boolean;
   tags?: { name: string }[];
 }
 
 export interface SnippetCreationAttributes
-  extends Optional<Snippet, 'id' | 'createdAt' | 'updatedAt' | 'rawTokenHash' | 'rawTokenPrefix' | 'rawTokenCreatedAt' | 'rawSlug' | 'collection' | 'fileName' | 'isPublic'> {}
+  extends Optional<Snippet, 'id' | 'createdAt' | 'updatedAt' | 'rawTokenHash' | 'rawTokenPrefix' | 'rawTokenCreatedAt' | 'rawSlug' | 'collection' | 'fileName' | 'isPublic' | 'variables' | 'dangerous'> {}

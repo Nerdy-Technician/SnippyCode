@@ -9,6 +9,8 @@ import {
   Editor,
   Home,
   PublicSnippet,
+  Approvals,
+  RunbookGuide,
   RunbookRun,
   Runbooks,
   Schedules,
@@ -62,6 +64,8 @@ const PrivateApp = (): JSX.Element => (
         <Route path='/editor/:id?' component={EditorRoute} />
         <Route path='/variables' component={Variables} />
         <Route path='/sites/:id?' component={Sites} />
+        <Route path='/help/runbooks' component={RunbookGuide} />
+        <Route path='/approvals' component={Approvals} />
         <Route path='/runbooks/runs/:runId' component={RunbookRun} />
         <Route path='/runbooks/:id?' component={Runbooks} />
         <Route path='/schedules/:id?' component={Schedules} />

@@ -3,9 +3,11 @@ import {
   createSchedule,
   deleteSchedule,
   getSchedule,
+  getScheduleForEdit,
   getSchedules,
   previewSchedule,
   runScheduleNow,
+  getScheduleRunDevices,
   updateSchedule
 } from '../controllers/schedules';
 import { requireAuth, requireMinimumRole } from '../middleware';
@@ -23,4 +25,6 @@ scheduleRouter
   .get(getSchedule)
   .put(editor, updateSchedule)
   .delete(editor, deleteSchedule);
+scheduleRouter.route('/:id/edit').get(editor, getScheduleForEdit);
 scheduleRouter.route('/:id/run').post(editor, runScheduleNow);
+scheduleRouter.route('/:id/runs/:runId').get(getScheduleRunDevices);

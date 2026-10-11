@@ -6,7 +6,11 @@
 # /etc/snippycode-agent.conf (URL, DEVICE_TOKEN, ALLOW_HTTP).
 set -uo pipefail
 
-AGENT_VERSION="1.3.0"
+AGENT_VERSION="1.4.0"
+# Ed25519 public keys (base64 DER, space-separated: current and next) that
+# updates must be signed with. Filled in by scripts/agent-release.js when a
+# release is signed; empty = no updates.
+AGENT_UPDATE_PUBKEYS=""
 CONFIG="${SNIPPYCODE_AGENT_CONFIG:-/etc/snippycode-agent.conf}"
 WORK="${SNIPPYCODE_AGENT_WORK:-/var/lib/snippycode-agent}"
 # Enough for full software lists and event logs
@@ -27,6 +31,67 @@ AUTO_UPDATE="1"
 # shellcheck source=/dev/null
 . "$CONFIG"
 URL="${URL%/}"
+
+# Stable agent ID written by install.sh; sent with every poll so the server
+# can register it on this device (no re-enrolment needed)
+AGENT_ID_FILE="${SNIPPYCODE_AGENT_ID_FILE:-/etc/snippycode-agent/agent-id}"
+AGENT_ID=""
+if [ -r "$AGENT_ID_FILE" ]; then AGENT_ID="$(tr -dc 'a-f0-9-' < "$AGENT_ID_FILE")"; fi
+if [ "${#AGENT_ID}" -ne 36 ] && [ -r /proc/sys/kernel/random/uuid ]; then
+  AGENT_ID="$(cat /proc/sys/kernel/random/uuid)"
+  mkdir -p "$(dirname "$AGENT_ID_FILE")" 2>/dev/null && chmod 700 "$(dirname "$AGENT_ID_FILE")" 2>/dev/null
+  (umask 077 && printf '%s\n' "$AGENT_ID" > "$AGENT_ID_FILE") 2>/dev/null || true
+fi
+
+# Hardware fingerprint: sha256 of machine ID, sorted physical MACs and the
+# board serial where readable. Only the hash ever leaves this machine.
+hardware_fingerprint() {
+  local mid="" macs="" serial="" iface
+  for f in /etc/machine-id /var/lib/dbus/machine-id; do
+    if [ -r "$f" ]; then mid="$(tr -d '[:space:]' < "$f")"; break; fi
+  done
+  for iface in /sys/class/net/*; do
+    [ -e "$iface/device" ] && [ -r "$iface/address" ] || continue
+    macs="$macs$(tr -d '[:space:]' < "$iface/address" | tr 'A-F' 'a-f')"$'\n'
+  done
+  macs="$(printf '%s' "$macs" | sort -u | tr '\n' ',')"
+  if [ -r /sys/class/dmi/id/product_serial ]; then serial="$(tr -d '[:space:]' < /sys/class/dmi/id/product_serial)"; fi
+  printf '%s|%s|%s' "$mid" "$macs" "$serial" | sha256sum | cut -d' ' -f1
+}
+FINGERPRINT="$(hardware_fingerprint)"
+
+# Health check used after an update: the new script runs, reads the config,
+# and the server accepts its token on this hardware (fingerprint checked). Exit 0 = healthy.
+if [ "${1:-}" = "--self-test" ]; then
+  curl -fsS --max-time 20 -o /dev/null -H "Authorization: Bearer $DEVICE_TOKEN" \
+    -H "X-Agent-Fingerprint: $FINGERPRINT" "$URL/api/agent/ping"
+  exit $?
+fi
+
+# The server refused this token on this hardware (a cloned disk or VM).
+# Swap it for a new device at the same site via clone self-enrol: no
+# enrolment token is kept on disk. The original device is never touched.
+reenrol() {
+  local response new_token new_id
+  response="$(curl -fsS --max-time 30 -X POST "$URL/api/agent/clone-enroll?format=env" \
+    -H "Authorization: Bearer $DEVICE_TOKEN" -H "X-Agent-Fingerprint: $FINGERPRINT" \
+    --data-urlencode "agentId=$AGENT_ID" \
+    --data-urlencode "hostname=$(hostname)" \
+    --data-urlencode "version=$AGENT_VERSION")" || {
+    log "Clone enrolment was refused. Rerun install.sh --reset-id with an enrolment token."
+    return 1
+  }
+  new_token="$(printf '%s\n' "$response" | sed -n 's/^DEVICE_TOKEN=//p' | tr -dc 'A-Za-z0-9_-')"
+  new_id="$(printf '%s\n' "$response" | sed -n 's/^AGENT_ID=//p' | tr -dc 'a-f0-9-')"
+  [ -n "$new_token" ] || { log "Clone enrolment returned no device token"; return 1; }
+  if [ "${#new_id}" -eq 36 ]; then
+    (umask 077 && printf '%s\n' "$new_id" > "$AGENT_ID_FILE") || return 1
+    AGENT_ID="$new_id"
+  fi
+  sed -i "s/^DEVICE_TOKEN=.*/DEVICE_TOKEN=\"$new_token\"/" "$CONFIG" || return 1
+  DEVICE_TOKEN="$new_token"
+  log "Enrolled this clone as its own device; it stays idle until an admin approves it"
+}
 
 if [ -z "$URL" ] || [ -z "$DEVICE_TOKEN" ]; then
   log "URL and DEVICE_TOKEN must be set in $CONFIG"
@@ -88,7 +153,7 @@ send_facts() {
   read -r load1 load5 load15 _ < /proc/loadavg 2>/dev/null || true
 
   curl -fsS --max-time 20 -o /dev/null \
-    -H "Authorization: Bearer $DEVICE_TOKEN" \
+    -H "Authorization: Bearer $DEVICE_TOKEN" -H "X-Agent-Fingerprint: $FINGERPRINT" \
     --data-urlencode "osName=$os_name" \
     --data-urlencode "kernel=$kernel" \
     --data-urlencode "cpus=$cpus" \
@@ -107,26 +172,112 @@ send_facts() {
     "$URL/api/agent/facts" || log "Could not send system facts"
 }
 
-# Replace this script with the server's newer agent and restart. The new
-# file must parse and report the expected version before it is swapped in.
+# Signed self-update. The new agent must match the server's SHA-256 AND carry
+# a valid Ed25519 signature from the key embedded above (checked with
+# openssl), parse, and report the expected version. The current script is
+# kept as .prev; if the new one fails its health check it is put back.
+report_update() {
+  curl -fsS --max-time 20 -o /dev/null -H "Authorization: Bearer $DEVICE_TOKEN" -H "X-Agent-Fingerprint: $FINGERPRINT" \
+    --data-urlencode "from=$1" --data-urlencode "to=$2" --data-urlencode "ok=$3" --data-urlencode "detail=$4" \
+    "$URL/api/agent/update-result" || true
+}
+
+# openssl only from a root-owned, non-writable system path, never via PATH
+trusted_openssl() {
+  local candidate owner mode
+  for candidate in /usr/bin/openssl /bin/openssl /usr/local/bin/openssl; do
+    [ -x "$candidate" ] && [ ! -L "$candidate" ] || continue
+    owner="$(stat -c '%u' "$candidate" 2>/dev/null)"; mode="$(stat -c '%a' "$candidate" 2>/dev/null)"
+    [ "$owner" = "0" ] || continue
+    case "$mode" in *[2367]?|*?[2367]) continue ;; esac
+    echo "$candidate"; return 0
+  done
+  return 1
+}
+
+# True when $1 is a strictly newer version than $2
+version_newer() {
+  [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ]
+}
+
+# The signed manifest entry: file, platform, arch, version, sha256 and the
+# downgrade flag are all covered by the signature, so none can be swapped.
+signed_message() {
+  printf 'snippycode-agent-update/v1\nfile=snippycode-agent.sh\nplatform=linux\narch=%s\nversion=%s\nsha256=%s\ndowngrade=%s\n' "$1" "$2" "$3" "$4"
+}
+
+verify_signature() {
+  local message="$1" sig_b64="$2" openssl key rc=1 pem="$WORK/update.pub.pem" sig="$WORK/update.sig" msg="$WORK/update.msg"
+  openssl="$(trusted_openssl)" || return 1
+  [ -n "$AGENT_UPDATE_PUBKEYS" ] || return 1
+  printf '%s' "$message" > "$msg"
+  printf '%s' "$sig_b64" | "$openssl" base64 -d -A > "$sig" 2>/dev/null || { rm -f "$msg" "$sig"; return 1; }
+  for key in $AGENT_UPDATE_PUBKEYS; do
+    { echo "-----BEGIN PUBLIC KEY-----"; echo "$key"; echo "-----END PUBLIC KEY-----"; } > "$pem"
+    if "$openssl" pkeyutl -verify -pubin -inkey "$pem" -rawin -in "$msg" -sigfile "$sig" >/dev/null 2>&1; then rc=0; break; fi
+  done
+  rm -f "$pem" "$sig" "$msg"
+  return $rc
+}
+
 self_update() {
-  local latest="$1" self new
+  local latest="$1" self dir new prev headers want_sum got_sum sig version arch platform downgrade pinned failed_file
   [ "$AUTO_UPDATE" = "1" ] || return 0
   self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
-  [ -w "$self" ] || { log "Agent $latest is available but $self is not writable"; return 0; }
-
-  new="$WORK/agent.new"
-  if curl -fsSL --max-time 60 "$URL/agent/snippycode-agent.sh" -o "$new" \
-    && bash -n "$new" \
-    && grep -q "^AGENT_VERSION=\"$latest\"" "$new"; then
-    chmod 755 "$new"
-    mv "$new" "$self"
-    log "Updated from $AGENT_VERSION to $latest; restarting"
-    exec "$self"
+  dir="$(dirname "$self")"
+  [ -w "$self" ] && [ -w "$dir" ] || { log "Agent $latest is available but $self is not writable"; return 0; }
+  if [ -z "$AGENT_UPDATE_PUBKEYS" ] || ! trusted_openssl >/dev/null; then
+    log "Agent $latest is available, but updates need a signed release and a root-owned openssl; reinstall to update"
+    return 0
   fi
+  # A version that failed its health check is not retried until a newer one appears
+  failed_file="$WORK/update-failed"
+  if [ -r "$failed_file" ] && [ "$(cat "$failed_file")" = "$latest" ]; then return 0; fi
 
+  # Same directory as the agent, so the final mv is an atomic rename
+  new="$(mktemp "$dir/.snippycode-agent.XXXXXX")" || return 0
+  prev="$self.prev"
+  headers="$WORK/update.headers"
+  if ! curl -fsS --max-time 60 -D "$headers" -o "$new" -H "Authorization: Bearer $DEVICE_TOKEN" -H "X-Agent-Fingerprint: $FINGERPRINT" \
+    "$URL/api/agent/update?file=snippycode-agent.sh"; then
+    rm -f "$new" "$headers"; log "Could not download agent $latest"; return 0
+  fi
+  version="$(header x-agent-version "$headers")"
+  want_sum="$(header x-agent-sha256 "$headers")"
+  sig="$(header x-agent-signature "$headers")"
+  platform="$(header x-agent-platform "$headers")"
+  arch="$(header x-agent-arch "$headers")"
+  downgrade="$(header x-agent-downgrade "$headers")"
+  pinned="$(header x-agent-pinned "$headers")"
+  rm -f "$headers"
+  got_sum="$(sha256sum "$new" 2>/dev/null | cut -d' ' -f1)"
+  case "$downgrade" in 1) ;; *) downgrade=0 ;; esac
+
+  if [ ! -s "$new" ] || [ -z "$want_sum" ] || [ "$got_sum" != "$want_sum" ] || [ "$platform" != "linux" ]; then
+    log "Agent $latest failed its checksum; not installed"; report_update "$AGENT_VERSION" "${version:-$latest}" 0 "checksum mismatch"
+  elif ! verify_signature "$(signed_message "${arch:-any}" "$version" "$got_sum" "$downgrade")" "$sig"; then
+    log "Agent $latest has no valid signature; not installed"; report_update "$AGENT_VERSION" "${version:-$latest}" 0 "bad signature"
+  elif ! version_newer "$version" "$AGENT_VERSION" && ! { [ "$pinned" = "1" ] && [ "$downgrade" = "1" ]; }; then
+    log "Refusing agent $version: not newer than $AGENT_VERSION"; report_update "$AGENT_VERSION" "$version" 0 "downgrade refused"
+  elif ! bash -n "$new" || ! grep -q "^AGENT_VERSION=\"$version\"$" "$new"; then
+    log "Agent $latest did not check out; not installed"; report_update "$AGENT_VERSION" "$version" 0 "parse or version check"
+  else
+    rm -f "$prev"
+    cp -p "$self" "$prev"
+    chmod 755 "$new"
+    mv -f "$new" "$self"
+    if "$self" --self-test; then
+      rm -f "$failed_file"
+      log "Updated from $AGENT_VERSION to $version (previous kept at $prev); restarting"
+      report_update "$AGENT_VERSION" "$version" 1 ""
+      exec "$self"
+    fi
+    mv -f "$prev" "$self"
+    printf '%s' "$version" > "$failed_file"
+    log "Agent $version failed its health check; rolled back to $AGENT_VERSION"
+    report_update "$AGENT_VERSION" "$version" 0 "health check failed, rolled back"
+  fi
   rm -f "$new"
-  log "Update to $latest failed; staying on $AGENT_VERSION"
 }
 
 run_job() {
@@ -163,7 +314,7 @@ run_job() {
   local attempt
   for attempt in 1 2 3 4 5; do
     if curl -fsS --max-time 60 \
-      -H "Authorization: Bearer $DEVICE_TOKEN" \
+      -H "Authorization: Bearer $DEVICE_TOKEN" -H "X-Agent-Fingerprint: $FINGERPRINT" \
       -F "exitCode=$exit_code" \
       -F "durationMs=$duration" \
       -F "timedOut=$timed_out" \
@@ -195,8 +346,8 @@ while true; do
   headers="$WORK/next.headers"
   body="$WORK/next.body"
   status="$(curl -sS --max-time 45 -o "$body" -D "$headers" -w '%{http_code}' \
-    -H "Authorization: Bearer $DEVICE_TOKEN" \
-    "$URL/api/agent/next?wait=25&version=$AGENT_VERSION&caps=$(capabilities)")" || status="000"
+    -H "Authorization: Bearer $DEVICE_TOKEN" -H "X-Agent-Fingerprint: $FINGERPRINT" \
+    "$URL/api/agent/next?wait=25&version=$AGENT_VERSION&caps=$(capabilities)&agentId=$AGENT_ID")" || status="000"
 
   # Update between jobs, and try each new version only once
   latest="$(header x-agent-latest "$headers" 2>/dev/null)"
@@ -221,6 +372,14 @@ while true; do
       ;;
     204)
       backoff=5
+      ;;
+    409)
+      if [ -n "$(header x-reenrol-required "$headers" 2>/dev/null)" ]; then
+        log "The server says this device token belongs to other hardware; re-enrolling"
+        reenrol || sleep 300
+      else
+        sleep "$backoff"
+      fi
       ;;
     401|403)
       log "The device token was rejected (revoked?). Retrying in 5 minutes."

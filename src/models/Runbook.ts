@@ -1,19 +1,20 @@
 import { Model, DataTypes, Optional } from 'sequelize';
 import { sequelize } from '../db';
 
-const { INTEGER, STRING, DATE, TEXT } = DataTypes;
+const { INTEGER, STRING, DATE, TEXT, BOOLEAN } = DataTypes;
 
 export interface Runbook {
   id: number;
   title: string;
   description: string;
   createdBy: number | null;
+  dangerous: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
 
 export interface RunbookInstance
-  extends Model<Runbook, Optional<Runbook, 'id' | 'createdAt' | 'updatedAt' | 'description'>>,
+  extends Model<Runbook, Optional<Runbook, 'id' | 'createdAt' | 'updatedAt' | 'description' | 'dangerous'>>,
     Runbook {}
 
 export const RunbookModel = sequelize.define<RunbookInstance>(
@@ -23,6 +24,7 @@ export const RunbookModel = sequelize.define<RunbookInstance>(
     title: { type: STRING(200), allowNull: false },
     description: { type: TEXT, allowNull: false, defaultValue: '' },
     createdBy: { type: INTEGER, allowNull: true },
+    dangerous: { type: BOOLEAN, allowNull: false, defaultValue: false },
     createdAt: { type: DATE },
     updatedAt: { type: DATE }
   },
@@ -36,12 +38,13 @@ export interface RunbookStep {
   snippetId: number | null;
   title: string;
   note: string;
+  values: Record<string, string>;
   createdAt: Date;
   updatedAt: Date;
 }
 
 export interface RunbookStepInstance
-  extends Model<RunbookStep, Optional<RunbookStep, 'id' | 'createdAt' | 'updatedAt' | 'title' | 'note'>>,
+  extends Model<RunbookStep, Optional<RunbookStep, 'id' | 'createdAt' | 'updatedAt' | 'title' | 'note' | 'values'>>,
     RunbookStep {}
 
 export const RunbookStepModel = sequelize.define<RunbookStepInstance>(
@@ -53,6 +56,21 @@ export const RunbookStepModel = sequelize.define<RunbookStepInstance>(
     snippetId: { type: INTEGER, allowNull: true },
     title: { type: STRING(200), allowNull: false, defaultValue: '' },
     note: { type: TEXT, allowNull: false, defaultValue: '' },
+    values: {
+      type: TEXT,
+      allowNull: false,
+      defaultValue: '{}',
+      get(this: any) {
+        try {
+          return JSON.parse(this.getDataValue('values') || '{}');
+        } catch {
+          return {};
+        }
+      },
+      set(this: any, value: unknown) {
+        this.setDataValue('values', typeof value === 'string' ? value : JSON.stringify(value || {}));
+      }
+    },
     createdAt: { type: DATE },
     updatedAt: { type: DATE }
   },

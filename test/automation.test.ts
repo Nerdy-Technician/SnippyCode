@@ -293,7 +293,8 @@ describe('agents, schedules, notifications and backups', { skip }, () => {
     const job = await agent(deviceToken).next();
     assert.equal(job.status, 200);
     assert.equal(job.headers['x-job-language'], 'bash');
-    assert.equal(job.text, `echo "disk ok for ${SECRET}"\n`);
+    // Quoted for bash inside the author's double quotes: the shell prints the quotes
+    assert.equal(job.text, `echo "disk ok for '${SECRET}'"\n`);
 
     const [stored] = await db.sequelize.query(`SELECT payload FROM agent_jobs WHERE id = :id`, {
       type: 'SELECT',

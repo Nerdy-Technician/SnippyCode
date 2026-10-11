@@ -144,7 +144,7 @@ describe('variables, secrets, sites, runs and runbooks', { skip }, () => {
         body: {
           title: 'Deploy agent',
           language: 'bash',
-          code: 'echo "{{HOST:localhost}} {{API_TOKEN}} {{REGION:eu}}"\n',
+          code: 'echo {{HOST:localhost}} {{API_TOKEN}} {{REGION:eu}}\n',
           description: '',
           docs: '',
           tags: [],
@@ -235,7 +235,7 @@ describe('variables, secrets, sites, runs and runbooks', { skip }, () => {
       body: {
         title: 'Deploy agent',
         language: 'bash',
-        code: 'echo "{{HOST:localhost}} {{API_TOKEN}} {{REGION:eu}}"\n',
+        code: 'echo {{HOST:localhost}} {{API_TOKEN}} {{REGION:eu}}\n',
         description: '',
         docs: '',
         tags: [],
@@ -246,7 +246,8 @@ describe('variables, secrets, sites, runs and runbooks', { skip }, () => {
 
     const raw = await request('GET', `/raw/${snippet.rawSlug}`, { as: null });
     assert.equal(raw.status, 200);
-    assert.equal(raw.text, 'echo "localhost {{API_TOKEN}} eu"\n');
+    // Values are quoted for bash; an unfilled secret stays a placeholder
+    assert.equal(raw.text, "echo 'localhost' {{API_TOKEN}} 'eu'\n");
 
     const withSite = await request('GET', `/raw/${snippet.rawSlug}?site=${acme.slug}`, { as: null });
     assert.equal(withSite.status, 401);
@@ -257,14 +258,14 @@ describe('variables, secrets, sites, runs and runbooks', { skip }, () => {
       as: null
     });
     assert.equal(raw.status, 200, raw.text);
-    assert.equal(raw.text, `echo "acme.example ${SECRET} us"\n`);
+    assert.equal(raw.text, `echo 'acme.example' '${SECRET}' 'us'\n`);
     assert.equal(
       raw.headers['x-content-sha256'],
       createHash('sha256').update(raw.text).digest('hex')
     );
 
     const template = await request('GET', `/raw/${snippet.rawSlug}?key=${snippetToken}&render=0`, { as: null });
-    assert.equal(template.text, 'echo "{{HOST:localhost}} {{API_TOKEN}} {{REGION:eu}}"\n');
+    assert.equal(template.text, 'echo {{HOST:localhost}} {{API_TOKEN}} {{REGION:eu}}\n');
   });
 
   test('a snippet token cannot reach a members-only site; the admin key can', async () => {
@@ -300,7 +301,7 @@ describe('variables, secrets, sites, runs and runbooks', { skip }, () => {
     const rendered = await ok(
       request('POST', `/api/snippets/${snippet.id}/render`, { as: 'editor', body: { siteId: vault.id } })
     );
-    assert.equal(rendered.code, `echo "vault.internal ${SECRET} eu"\n`);
+    assert.equal(rendered.code, `echo 'vault.internal' '${SECRET}' 'eu'\n`);
     assert.deepEqual(rendered.secretsUsed, ['API_TOKEN']);
     assert.equal(rendered.sha256, createHash('sha256').update(rendered.code).digest('hex'));
 
@@ -313,7 +314,7 @@ describe('variables, secrets, sites, runs and runbooks', { skip }, () => {
     const rendered = await ok(
       request('POST', `/api/snippets/${snippet.id}/render`, { as: 'editor', body: { siteId: acme.id } })
     );
-    assert.equal(rendered.code, `echo "acme.example ${SECRET} mine"\n`);
+    assert.equal(rendered.code, `echo 'acme.example' '${SECRET}' 'mine'\n`);
   });
 
   test('server runs are saved per site with secrets masked', async () => {

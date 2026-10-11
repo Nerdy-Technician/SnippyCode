@@ -18,6 +18,7 @@ const PAGES: Item[] = [
   { id: 'p-snippets', kind: 'Page', label: 'Snippets', to: '/snippets' },
   { id: 'p-sites', kind: 'Page', label: 'Sites', to: '/sites' },
   { id: 'p-runbooks', kind: 'Page', label: 'Runbooks', to: '/runbooks' },
+  { id: 'p-runbook-guide', kind: 'Page', label: 'Runbook guide', to: '/help/runbooks' },
   { id: 'p-schedules', kind: 'Page', label: 'Schedules', to: '/schedules' },
   { id: 'p-variables', kind: 'Page', label: 'Variables', to: '/variables' }
 ];

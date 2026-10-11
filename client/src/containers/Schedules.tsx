@@ -1,17 +1,22 @@
 import { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useHistory, useParams } from 'react-router-dom';
 import axios from 'axios';
+import { StepValuesEditor } from '../components/Runbooks/StepValuesEditor';
+import { runValueProblems } from '../utils/snippetVariables';
 import { AuthContext, SnippetsContext } from '../store';
 import { Card, Layout } from '../components/UI';
 import {
+  DeviceListItem,
   Policy,
   Response,
   RunbookListItem,
   Schedule,
   ScheduleDetail,
+  ScheduleRunDevices,
   ScheduleSiteMode
 } from '../typescript/interfaces';
-import { canAdmin, canEditSnippets, dateParser } from '../utils';
+import { canAdmin, canEditSnippets, dateParser, previewTargets, useSharedTags } from '../utils';
+import { TagChip } from '../components/Tags/TagChip';
 import { apiError } from '../components/Variables/VariableFields';
 import { RunOutput } from '../components/Runs/RunHistory';
 
@@ -66,20 +71,33 @@ const describeWhere = (schedule: Schedule): string => {
       ? `sites tagged ${schedule.siteTag}`
       : schedule.siteMode === 'policy'
       ? `devices in policy ${schedule.policyName || '(deleted)'}`
+      : schedule.siteMode === 'devices'
+      ? [
+          schedule.deviceIds.length ? `${schedule.deviceIds.length} chosen devices` : '',
+          schedule.deviceTag ? `devices tagged ${schedule.deviceTag}` : ''
+        ]
+          .filter(Boolean)
+          .join(' + ')
       : schedule.siteNames.join(', ') || 'no sites';
 
-  return `${where} · ${schedule.runOn === 'devices' ? 'on their devices' : 'on the server'}`;
+  const extra =
+    schedule.siteMode !== 'devices' && schedule.runOn === 'devices'
+      ? [schedule.deviceTag ? ` tagged ${schedule.deviceTag}` : '', schedule.deviceIds.length ? ` + ${schedule.deviceIds.length} chosen` : ''].join('')
+      : '';
+
+  return `${where} · ${schedule.runOn === 'devices' ? `on their devices${extra}` : 'on the server'}`;
 };
 
 const statusText: { [status: string]: string } = {
   running: 'Running',
   succeeded: 'Succeeded',
   failed: 'Failed',
-  attention: 'Needs a person'
+  attention: 'Needs a person',
+  missed: 'Missed (skipped)'
 };
 
 const statusClass = (status: string | null): string =>
-  status === 'succeeded' ? 'is-ok' : status === 'failed' ? 'is-bad' : status ? 'is-in_progress' : '';
+  status === 'succeeded' ? 'is-ok' : status === 'failed' ? 'is-bad' : status === 'missed' ? 'is-missed' : status ? 'is-in_progress' : '';
 
 interface Form {
   name: string;
@@ -91,6 +109,9 @@ interface Form {
   siteMode: ScheduleSiteMode;
   siteIds: number[];
   siteTag: string;
+  deviceIds: number[];
+  deviceTagIds: number[];
+  variables: Record<string, string>;
   policyId: string;
   runOn: 'server' | 'devices';
   notifyOn: 'failure' | 'always' | 'never';
@@ -107,6 +128,9 @@ const emptyForm = (): Form => ({
   siteMode: 'none',
   siteIds: [],
   siteTag: '',
+  deviceIds: [],
+  deviceTagIds: [],
+  variables: {},
   policyId: '',
   runOn: 'server',
   notifyOn: 'failure',
@@ -123,6 +147,9 @@ const formFrom = (schedule: Schedule): Form => ({
   siteMode: schedule.siteMode,
   siteIds: schedule.siteIds,
   siteTag: schedule.siteTag,
+  deviceIds: schedule.deviceIds || [],
+  deviceTagIds: schedule.deviceTagIds || [],
+  variables: schedule.variables || {},
   policyId: String(schedule.policyId || ''),
   runOn: schedule.runOn,
   notifyOn: schedule.notifyOn,
@@ -140,6 +167,8 @@ const ScheduleForm = (props: {
   const [form, setForm] = useState<Form>(props.initial);
   const [runbooks, setRunbooks] = useState<RunbookListItem[]>([]);
   const [policies, setPolicies] = useState<Policy[]>([]);
+  const [devices, setDevices] = useState<DeviceListItem[]>([]);
+  const [deviceFilter, setDeviceFilter] = useState('');
   const [preview, setPreview] = useState<{ valid: boolean; error?: string; next: string[] } | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -151,6 +180,8 @@ const ScheduleForm = (props: {
     getSites();
     axios.get<Response<RunbookListItem[]>>('/api/runbooks').then(res => setRunbooks(res.data.data)).catch(() => undefined);
     axios.get<Response<Policy[]>>('/api/policies').then(res => setPolicies(res.data.data)).catch(() => undefined);
+    // Only devices in sites this user can access come back
+    axios.get<Response<DeviceListItem[]>>('/api/devices').then(res => setDevices(res.data.data)).catch(() => undefined);
   }, []);
 
   // Live preview of the next run times
@@ -169,6 +200,21 @@ const ScheduleForm = (props: {
 
   const set = (patch: Partial<Form>) => setForm(current => ({ ...current, ...patch }));
 
+  const { tags: sharedTags } = useSharedTags();
+  const chosenTagNames = sharedTags.filter(tag => form.deviceTagIds.includes(tag.id)).map(tag => tag.name);
+  const pickable = useMemo(() => {
+    const term = deviceFilter.trim().toLowerCase();
+    return devices.filter(device =>
+      !term || `${device.name} ${device.hostname} ${device.site?.name || ''}`.toLowerCase().includes(term)
+    );
+  }, [devices, deviceFilter]);
+  const matched = useMemo(
+    () =>
+      previewTargets(devices, { ...form, deviceTags: chosenTagNames }, form.siteMode === 'tag' ? sites.filter(site => site.tags.includes(form.siteTag)).map(site => site.id) : undefined),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [devices, form, sites, sharedTags]
+  );
+
   const save = async () => {
     setSaving(true);
     setError('');
@@ -177,8 +223,18 @@ const ScheduleForm = (props: {
       ...form,
       snippetId: Number(form.snippetId) || undefined,
       runbookId: Number(form.runbookId) || undefined,
-      policyId: Number(form.policyId) || undefined
+      policyId: Number(form.policyId) || undefined,
+      deviceTagIds: form.deviceTagIds,
+      variables: form.targetType === 'snippet' ? form.variables : {}
     };
+
+    const target = snippets.find(item => item.id === Number(form.snippetId));
+    const problems = form.targetType === 'snippet' && target ? runValueProblems(target.variables || [], form.variables) : [];
+    if (problems.length) {
+      setError(problems.join('; '));
+      setSaving(false);
+      return;
+    }
 
     try {
       const res = props.id
@@ -238,6 +294,21 @@ const ScheduleForm = (props: {
               </option>
             ))}
           </select>
+        ) : (
+          <></>
+        )}
+        {form.targetType === 'snippet' && snippets.find(item => item.id === Number(form.snippetId)) ? (
+          <StepValuesEditor
+            code={snippets.find(item => item.id === Number(form.snippetId))!.code}
+            definitions={snippets.find(item => item.id === Number(form.snippetId))!.variables || []}
+            value={form.variables}
+            onChange={variables => set({ variables })}
+          />
+        ) : (
+          <></>
+        )}
+        {form.targetType === 'snippet' ? (
+          <></>
         ) : (
           <select className='form-control' value={form.runbookId} onChange={e => set({ runbookId: e.target.value })}>
             <option value=''>Choose a runbook…</option>
@@ -299,15 +370,16 @@ const ScheduleForm = (props: {
             ['sites', 'Chosen sites'],
             ['tag', 'Sites with a tag'],
             ['all', 'All sites'],
-            ['policy', 'A policy’s devices']
+            ['policy', 'A policy’s devices'],
+            ['devices', 'Chosen devices']
           ] as [ScheduleSiteMode, string][])
-            .filter(([mode]) => admin || mode === 'none' || mode === 'sites')
+            .filter(([mode]) => admin || mode === 'none' || mode === 'sites' || mode === 'devices')
             .map(([mode, label]) => (
               <button
                 key={mode}
                 type='button'
                 className={form.siteMode === mode ? 'is-active' : ''}
-                onClick={() => set({ siteMode: mode, runOn: mode === 'none' ? 'server' : mode === 'policy' ? 'devices' : form.runOn })}
+                onClick={() => set({ siteMode: mode, runOn: mode === 'none' ? 'server' : mode === 'policy' || mode === 'devices' ? 'devices' : form.runOn })}
               >
                 {label}
               </button>
@@ -357,7 +429,66 @@ const ScheduleForm = (props: {
             <p className='form-text mb-0'>Runs on every device the policy covers, including devices that join it later.</p>
           </>
         )}
-        {form.siteMode !== 'none' && form.siteMode !== 'policy' && (
+        {form.runOn === 'devices' && form.siteMode !== 'none' && (
+          <div className='schedule-devices' aria-label='Device targets'>
+            <div>
+              <span>Device tags {form.siteMode === 'devices' ? '(optional, any of)' : '(only devices with any of these)'}</span>
+              <div className='d-flex flex-wrap gap-1' aria-label='Schedule device tags'>
+                {sharedTags.length === 0 && <span className='form-text'>No tags yet. Add them on the Devices page.</span>}
+                {sharedTags.map(tag => (
+                  <TagChip
+                    key={tag.id}
+                    name={tag.name}
+                    color={tag.color}
+                    active={form.deviceTagIds.includes(tag.id)}
+                    onClick={() =>
+                      set({
+                        deviceTagIds: form.deviceTagIds.includes(tag.id)
+                          ? form.deviceTagIds.filter(id => id !== tag.id)
+                          : [...form.deviceTagIds, tag.id]
+                      })
+                    }
+                  />
+                ))}
+              </div>
+            </div>
+            <input
+              className='form-control form-control-sm mt-2'
+              placeholder='Filter devices by name, hostname or site'
+              value={deviceFilter}
+              onChange={e => setDeviceFilter(e.target.value)}
+              aria-label='Filter devices'
+            />
+            <div className='schedule-sites schedule-device-list'>
+              {pickable.map(device => (
+                <label key={device.id} className='site-member'>
+                  <input
+                    type='checkbox'
+                    className='form-check-input'
+                    checked={form.deviceIds.includes(device.id)}
+                    onChange={e =>
+                      set({
+                        deviceIds: e.target.checked
+                          ? [...form.deviceIds, device.id]
+                          : form.deviceIds.filter(id => id !== device.id)
+                      })
+                    }
+                  />
+                  <span>
+                    {device.name} <small className='text-muted'>{device.site?.name}</small>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <p className='form-text mb-0'>
+              {form.siteMode === 'policy'
+                ? 'Chosen devices are added to the policy’s devices.'
+                : `Right now this matches ${matched.length} device${matched.length === 1 ? '' : 's'}.`}{' '}
+              Targets are worked out each time it runs, so new devices in these sites or with this tag are included.
+            </p>
+          </div>
+        )}
+        {form.siteMode !== 'none' && form.siteMode !== 'policy' && form.siteMode !== 'devices' && (
           <div className='segmented mt-2'>
             {([
               ['server', 'Run on the SnippyCode server'],
@@ -505,6 +636,8 @@ const ScheduleView = (props: { id: number }): JSX.Element => {
   const canEdit = canEditSnippets(user?.role);
   const [schedule, setSchedule] = useState<ScheduleDetail | null>(null);
   const [editing, setEditing] = useState(false);
+  // Decrypted values, fetched only when the editor opens
+  const [editValues, setEditValues] = useState<Record<string, string> | null>(null);
   const [error, setError] = useState('');
   const [open, setOpen] = useState<number | null>(null);
 
@@ -586,7 +719,7 @@ const ScheduleView = (props: { id: number }): JSX.Element => {
           {editing ? (
             <ScheduleForm
               id={schedule.id}
-              initial={formFrom(schedule)}
+              initial={{ ...formFrom(schedule), variables: editValues || schedule.variables || {} }}
               onSaved={() => {
                 setEditing(false);
                 load();
@@ -639,7 +772,13 @@ const ScheduleView = (props: { id: number }): JSX.Element => {
                   <button type='button' className='btn btn-sm btn-outline-secondary' onClick={toggle}>
                     {schedule.enabled ? 'Pause' : 'Resume'}
                   </button>
-                  <button type='button' className='btn btn-sm btn-outline-secondary' onClick={() => setEditing(true)}>
+                  <button type='button' className='btn btn-sm btn-outline-secondary' onClick={() =>
+                    axios
+                      .get<Response<ScheduleDetail>>(`/api/schedules/${schedule.id}/edit`)
+                      .then(res => setEditValues(res.data.data.variables || {}))
+                      .catch(() => setEditValues(null))
+                      .finally(() => setEditing(true))
+                  }>
                     Edit
                   </button>
                   <button type='button' className='btn btn-sm btn-outline-danger' onClick={remove}>
@@ -677,6 +816,7 @@ const ScheduleView = (props: { id: number }): JSX.Element => {
                   </button>
                   {open === run.id && (
                     <div className='schedule-results'>
+                      <ScheduleRunDeviceTable scheduleId={schedule.id} runId={run.id} />
                       {run.results.map(result => (
                         <details key={result.id} className='schedule-result'>
                           <summary>
@@ -703,6 +843,73 @@ const ScheduleView = (props: { id: number }): JSX.Element => {
         </Card>
       </div>
     </Layout>
+  );
+};
+
+/** Per-device results for one schedule run */
+export const ScheduleRunDeviceTable = (props: { scheduleId: number; runId: number }): JSX.Element => {
+  const [data, setData] = useState<ScheduleRunDevices | null>(null);
+
+  useEffect(() => {
+    axios
+      .get<Response<ScheduleRunDevices>>(`/api/schedules/${props.scheduleId}/runs/${props.runId}`)
+      .then(res => setData(res.data.data))
+      .catch(() => setData({ id: props.runId, status: 'unknown', devices: [] }));
+  }, [props.scheduleId, props.runId]);
+
+  if (!data) {
+    return <p className='text-muted small mb-1'>Loading device results…</p>;
+  }
+
+  if (!data.devices.length) {
+    return <></>;
+  }
+
+  return (
+    <table className='table table-sm schedule-device-results'>
+      <thead>
+        <tr>
+          <th scope='col'>Device</th>
+          <th scope='col'>Site</th>
+          <th scope='col'>Status</th>
+          <th scope='col'>Exit</th>
+          <th scope='col'>Started</th>
+          <th scope='col'>Finished</th>
+          <th scope='col'>Output</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.devices.map(item => (
+          <tr key={`${item.kind}-${item.deviceId}-${item.snippetRunId || item.runbookRunId || ''}`}>
+            <td>
+              <Link to={`/devices/${item.deviceId}`}>{item.deviceName}</Link>
+            </td>
+            <td>{item.site || '—'}</td>
+            <td>
+              <span className={`run-status ${item.ok === true ? 'is-ok' : item.ok === false ? 'is-bad' : 'is-in_progress'}`}>
+                {item.timedOut ? 'Timed out' : item.status.replace('_', ' ')}
+              </span>
+            </td>
+            <td>{item.exitCode ?? '—'}</td>
+            <td>{item.startedAt ? dateParser(item.startedAt).formatted : '—'}</td>
+            <td>{item.finishedAt ? dateParser(item.finishedAt).formatted : '—'}</td>
+            <td>
+              {item.kind === 'runbook' ? (
+                <Link to={`/runbooks/runs/${item.runbookRunId}`}>Open runbook run</Link>
+              ) : item.stdout || item.stderr ? (
+                <details>
+                  <summary>Show</summary>
+                  {item.stdout && <pre className='run-output'>{item.stdout}</pre>}
+                  {item.stderr && <pre className='run-output is-stderr'>{item.stderr}</pre>}
+                </details>
+              ) : (
+                '—'
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 };
 

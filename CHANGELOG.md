@@ -4,6 +4,41 @@ All notable changes to SnippyCode are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.3] - 2026-10-11
+
+### Added
+- Bulk enrolment: reusable enrolment tokens with max uses, expiry (default 7 days, max 365), revoke, use count and last-used tracking; unlimited tokens are allowed but always expire. "Bulk enrol" panel, token list and updated installers.
+- Re-enrolment is admin-only and does not count as a token use; re-enrolling a known machine with a token is refused (409, audited) unless the token allows it or an admin approves.
+- Site admin picker on the site members screen.
+- Device-targeted schedules: run a snippet or a runbook on devices picked individually, by site and/or by tag, resolved at run time, with per-schedule history and per-device results.
+- Shared coloured tags with a tag manager; schedules target tags by ID.
+- Two-way GitHub sync: separate auto-upload and auto-download toggles (off by default, owner-only), one shared interval, conflict detection with conflict-flagged copies (never silent overwrites), conservative deletes, backups before downloads, snippet tag sync and paging past 1,000 files.
+- Snippet variables: typed variable definitions (string, number, boolean, choice, secret-ref), placeholder auto-detection, import, run-time prompts and validation, runbook step values and schedule values.
+- In-app runbook guide and a one-click "Import example runbook" button; example playbook and `docs/playbooks.md`.
+- Approval for risky runs: dangerous or large runs wait for an admin, with content hashing so an approval is void if the code, values or targets change, site-scoped approvers, no self-approval, and owner-only settings.
+- Agent auto-update (Linux): signed manifest (Ed25519, SHA-256, version, platform, arch), key rotation, downgrade protection, canary then early then stable rollout with automatic pause on rollback, per-device ring and pin, and a time-limited bootstrap for older agents.
+- Stable agent IDs with automatic clone handling for golden images, hashed hardware fingerprints, `--reset-id` / `-ResetId` installer options and an admin "clear duplicate" action.
+- CI: migration checks (fresh and upgrade from v1.2.2), agent script checks (shellcheck, PSScriptAnalyzer), Node 20/22/24 test matrix, coverage artifacts, PR title lint, Docker image scan, production `npm audit` and a licence check.
+
+### Changed
+- Missed schedule runs are skipped and logged in run history and the audit log.
+- Run output is deleted after 90 days by a configurable daily cleanup job.
+- Stored schedule values are encrypted at rest with `VARIABLES_SECRET_KEY`.
+- Server tests run on Node 20 (no shell glob needed).
+
+### Security
+- Schedules: editing, deleting, running or reading the values of a schedule needs access to every site and device it currently targets (others get 404, audited); new targets are checked on save; runs reach only the sites both the creator and the last editor can access; a schedule nobody owns does not run; shared device tags across sites are admin-only.
+- Placeholder values are type-checked and quoted for the snippet's language (POSIX shell, PowerShell, Python/JavaScript; batch metacharacters refused). Admins can mark a variable raw.
+- Clones are activated only by an admin approval or a single-use activation token made for that clone; revoking a device revokes its pending clones (and approved ones on request); approval and activation are refused once the source is revoked.
+- Fingerprint bindings from an unexpected address are flagged for review, also during the first 7 days; admins can approve or reset the binding.
+- The agent bootstrap window can no longer be re-armed past 30 days from first use.
+- Approval payloads are encrypted with `enc:v2` bound to their row.
+- Production requires `VARIABLES_SECRET_KEY` and no longer falls back to `SESSION_SECRET`.
+- A schedule run whose approval went stale is closed as failed.
+
+### Migrations
+- 18 to 26: device schedules, GitHub auto-sync, run approvals, snippet variables, shared tags, agent identity, agent auto-update, clone identity and schedule value encryption, clone activation tokens.
+
 ## [1.2.2] - 2026-10-11
 
 ### Added
