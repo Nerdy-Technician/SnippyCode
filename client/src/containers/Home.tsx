@@ -13,7 +13,35 @@ import { AuthContext, SnippetsContext } from '../store';
 import { Layout, Card } from '../components/UI';
 import { SnippetGrid } from '../components/Snippets/SnippetGrid';
 import { SearchBar } from '../components/SearchBar';
-import { canAdmin, canEditSnippets } from '../utils';
+import { canAdmin, canEditSnippets, dateParser } from '../utils';
+import { Snippet } from '../typescript/interfaces';
+
+const time = (value?: string | null): number => (value ? new Date(value).getTime() : 0);
+
+const QuickList = (props: {
+  title: string;
+  empty: string;
+  items: Snippet[];
+  meta: (snippet: Snippet) => string;
+}): JSX.Element => (
+  <Card classes='home-panel h-100'>
+    <p className='eyebrow'>{props.title}</p>
+    {props.items.length === 0 ? (
+      <p className='text-muted mb-0'>{props.empty}</p>
+    ) : (
+      <ul className='quick-list'>
+        {props.items.map(snippet => (
+          <li key={snippet.id}>
+            <Link to={{ pathname: `/snippet/${snippet.id}`, state: { from: '/' } }}>
+              {snippet.title}
+            </Link>
+            <span>{props.meta(snippet)}</span>
+          </li>
+        ))}
+      </ul>
+    )}
+  </Card>
+);
 
 export const Home = (): JSX.Element => {
   const { snippets, getSnippets, searchResults, searchActive } =
@@ -22,6 +50,19 @@ export const Home = (): JSX.Element => {
   const canEdit = canEditSnippets(user?.role);
   const showAdmin = canAdmin(user?.role);
   const pinnedSnippets = snippets.filter(snippet => snippet.isPinned);
+  const favoriteSnippets = snippets.filter(snippet => snippet.personal?.isFavorite);
+  const recentlyViewed = snippets
+    .filter(snippet => snippet.personal?.lastViewedAt)
+    .sort((a, b) => time(b.personal?.lastViewedAt) - time(a.personal?.lastViewedAt))
+    .slice(0, 6);
+  const mostCopied = snippets
+    .filter(snippet => (snippet.personal?.copies || 0) > 0)
+    .sort(
+      (a, b) =>
+        (b.personal?.copies || 0) - (a.personal?.copies || 0) ||
+        time(b.personal?.lastCopiedAt) - time(a.personal?.lastCopiedAt)
+    )
+    .slice(0, 6);
   const recentSnippets = [...snippets]
     .sort(
       (a, b) =>
@@ -86,8 +127,8 @@ export const Home = (): JSX.Element => {
           <article>
             <FontAwesomeIcon icon={faStar} />
             <div>
-              <strong>{pinnedSnippets.length}</strong>
-              <span>Pinned</span>
+              <strong>{favoriteSnippets.length}</strong>
+              <span>My favorites</span>
             </div>
           </article>
           <article>
@@ -146,6 +187,37 @@ export const Home = (): JSX.Element => {
               <p className='eyebrow'>Search</p>
               <SearchBar />
             </Card>
+          </div>
+          {favoriteSnippets.length > 0 && (
+            <div className='col-12'>
+              <div className='home-section-header'>
+                <h2>My favorites</h2>
+                <Link to='/snippets?show=favorites'>View all</Link>
+              </div>
+              <SnippetGrid snippets={favoriteSnippets.slice(0, 6)} />
+            </div>
+          )}
+          <div className='col-12 col-lg-6'>
+            <QuickList
+              title='Recently viewed'
+              empty='Snippets you open show up here.'
+              items={recentlyViewed}
+              meta={snippet =>
+                dateParser(snippet.personal!.lastViewedAt!).relative
+              }
+            />
+          </div>
+          <div className='col-12 col-lg-6'>
+            <QuickList
+              title='Copied most'
+              empty='Snippets you copy show up here.'
+              items={mostCopied}
+              meta={snippet =>
+                `${snippet.personal!.copies} ${
+                  snippet.personal!.copies === 1 ? 'copy' : 'copies'
+                }`
+              }
+            />
           </div>
           {pinnedSnippets.length > 0 && (
             <div className='col-12'>

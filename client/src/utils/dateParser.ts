@@ -7,7 +7,7 @@ interface Return {
   relative: string;
 }
 
-export const dateParser = (date: Date): Return => {
+export const dateParser = (date: Date | string): Return => {
   dayjs.extend(relativeTime);
   dayjs.extend(customParseFormat);
 

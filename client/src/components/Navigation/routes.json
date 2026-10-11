@@ -9,9 +9,28 @@
       "dest": "/snippets"
     },
     {
-      "name": "Editor",
-      "dest": "/editor",
-      "minRole": "editor"
+      "name": "Sites",
+      "dest": "/sites"
+    },
+    {
+      "name": "Devices",
+      "dest": "/devices"
+    },
+    {
+      "name": "Alerts",
+      "dest": "/alerts"
+    },
+    {
+      "name": "Runbooks",
+      "dest": "/runbooks"
+    },
+    {
+      "name": "Schedules",
+      "dest": "/schedules"
+    },
+    {
+      "name": "Variables",
+      "dest": "/variables"
     },
     {
       "name": "Admin",

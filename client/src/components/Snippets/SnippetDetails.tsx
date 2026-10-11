@@ -1,4 +1,4 @@
-import { useContext, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 import { Link, useHistory } from 'react-router-dom';
 import axios from 'axios';
 import { AuthContext, SnippetsContext } from '../../store';
@@ -9,21 +9,31 @@ import {
   buildShareUrl,
   canEditSnippets,
   dateParser,
+  installCommands,
   isPowerShellLanguage,
   rawRefFor,
   readRawToken,
   removeRawToken,
+  renderTemplate,
   resolveBaseUrl,
   REMOTE_EXECUTE_WARNING,
+  sha256Hex,
   writeRawToken
 } from '../../utils';
 import { Badge, Button, Card } from '../UI';
 import copy from 'clipboard-copy';
 import { SnippetPin } from './SnippetPin';
 import { SnippetHistory } from './SnippetHistory';
+import { SnippetFavorite } from './SnippetFavorite';
+import { ResolvedVariable } from './SnippetVariables';
+import { RunHistory } from '../Runs/RunHistory';
+import { SnippetRunModal } from './SnippetRunModal';
+import { SnippetAiModal } from './SnippetAiModal';
 
 interface Props {
   snippet: Snippet;
+  variables: ResolvedVariable[];
+  inputs: Record<string, string>;
 }
 
 export const SnippetDetails = (props: Props): JSX.Element => {
@@ -34,7 +44,6 @@ export const SnippetDetails = (props: Props): JSX.Element => {
     createdAt,
     updatedAt,
     description,
-    code,
     id,
     isPinned,
     rawSlug,
@@ -42,46 +51,134 @@ export const SnippetDetails = (props: Props): JSX.Element => {
     rawTokenPrefix,
     collection,
     fileName,
-    isPublic
+    isPublic,
+    usage,
+    personal
   } = props.snippet;
+  const { variables, inputs } = props;
   const [showRawModal, setShowRawModal] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showRunModal, setShowRunModal] = useState(false);
+  const [showRuns, setShowRuns] = useState(false);
   const [rawToken, setRawToken] = useState(readRawToken(id));
   const [tokenNotice, setTokenNotice] = useState('');
-  const [runOutput, setRunOutput] = useState<{
-    ok: boolean;
-    timedOut: boolean;
-    exitCode: number | null;
-    stdout: string;
-    stderr: string;
-  } | null>(null);
-  const [runError, setRunError] = useState('');
-  const [running, setRunning] = useState(false);
+  const [aiMode, setAiMode] = useState<'explain' | 'convert' | null>(null);
+  const [checksum, setChecksum] = useState('');
+  const [copyNotice, setCopyNotice] = useState('');
 
   const history = useHistory();
-  const { user, snippetRun, publicBaseUrl } = useContext(AuthContext);
+  const { user, snippetRun, snippetAssist, publicBaseUrl } = useContext(AuthContext);
   const canEdit = canEditSnippets(user?.role);
+
+  const {
+    deleteSnippet,
+    duplicateSnippet,
+    setSnippet,
+    updateSnippet,
+    copySnippetCode,
+    patchSnippetFlags,
+    renderSnippet,
+    sites,
+    selectedSiteId,
+    setSelectedSiteId
+  } = useContext(SnippetsContext);
+  const site = sites.find(item => item.id === selectedSiteId) || null;
+  // Server runs need a supported language; device runs need a site with devices
   const canRun =
     canEdit &&
-    snippetRun.enabled &&
-    snippetRun.languages.includes(language.toLowerCase());
+    ((snippetRun.enabled && snippetRun.languages.includes(language.toLowerCase())) || Boolean(site));
 
-  const { deleteSnippet, duplicateSnippet, setSnippet, patchSnippetFlags } =
-    useContext(SnippetsContext);
+  // Raw links with a token or key get site, team, and secret values from the
+  // server, so only pin what the server cannot know: typed and personal values.
+  const tokenVariables: Record<string, string> = {};
+  // Public links get nothing from the server, so pin every non-secret value.
+  const publicVariables: Record<string, string> = {};
+
+  variables.forEach(variable => {
+    if (variable.source === 'missing' || variable.isSecret) {
+      return;
+    }
+
+    if (variable.source === 'input' || variable.source === 'personal') {
+      tokenVariables[variable.name] = variable.value;
+    }
+
+    if (variable.value !== variable.defaultValue) {
+      publicVariables[variable.name] = variable.value;
+    }
+  });
+
+  const personalSecrets = variables.filter(
+    variable => variable.isSecret && variable.source === 'personal'
+  );
+  const publicSecrets = variables.filter(variable => variable.isSecret);
+  const query = (values: Record<string, string>) => new URLSearchParams(values).toString();
 
   const creationDate = dateParser(createdAt);
   const updateDate = dateParser(updatedAt);
   const baseUrl = resolveBaseUrl(publicBaseUrl);
   const rawRef = rawRefFor({ id, rawSlug });
-  const getRawUrl = (token = rawToken || 'YOUR_SNIPPET_RAW_TOKEN'): string =>
-    `${buildRawUrl(baseUrl, rawRef)}?key=${encodeURIComponent(token)}`;
+  const getRawUrl = (token = rawToken || 'YOUR_SNIPPET_RAW_TOKEN'): string => {
+    const params = query({
+      key: token,
+      ...(site ? { site: site.slug } : {}),
+      ...tokenVariables
+    });
+
+    return `${buildRawUrl(baseUrl, rawRef)}?${params}`;
+  };
   const appUrl = `${baseUrl}/snippet/${id}`;
   const publicUrl = buildShareUrl(baseUrl, rawRef);
-  const curlCommand = `curl -fsSL "${getRawUrl()}"`;
-  const publicRawUrl = buildRawUrl(baseUrl, rawRef);
+  const publicQuery = query(publicVariables);
+  const publicRawUrl = `${buildRawUrl(baseUrl, rawRef)}${publicQuery ? `?${publicQuery}` : ''}`;
   const isPowerShell = isPowerShellLanguage(language);
   const powerShellCommand = buildPowerShellRemoteCommand(publicRawUrl);
+  // Prefer the token (it carries site values and secrets); fall back to the
+  // public link for public snippets without a token in this browser
+  const installUsesToken = Boolean(rawToken) || !isPublic;
+  const installUrl = installUsesToken ? getRawUrl() : publicRawUrl;
+  const installFile = fileName || rawSlug || `snippet-${id}`;
+  const installLines = installCommands(language, installUrl, installFile, checksum);
+  const missingVariables = variables.filter(variable => variable.source === 'missing');
+  const lastUsed = usage?.lastUsedAt ? dateParser(usage.lastUsedAt).relative : 'Never';
+  const checksumKey = JSON.stringify([installUsesToken, site?.id, tokenVariables, publicVariables]);
+
+  // Hash exactly what the install URL returns
+  useEffect(() => {
+    if (!showRawModal) {
+      return;
+    }
+
+    let cancelled = false;
+    setChecksum('');
+
+    const hash = installUsesToken
+      ? renderSnippet(id, { siteId: site?.id, variables: tokenVariables }).then(r => r.sha256)
+      : sha256Hex(renderTemplate(props.snippet.code, publicVariables));
+
+    hash
+      .then(value => {
+        if (!cancelled) {
+          setChecksum(value);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showRawModal, checksumKey, props.snippet.code]);
+
+  const copyCode = async () => {
+    setCopyNotice('');
+
+    try {
+      await copySnippetCode(props.snippet, { siteId: site?.id, variables: inputs });
+      setCopyNotice(site ? `Copied for ${site.name}` : 'Copied');
+    } catch {
+      setCopyNotice('Could not copy this snippet.');
+    }
+  };
 
   const togglePublic = () => {
     if (!canEdit) {
@@ -93,47 +190,13 @@ export const SnippetDetails = (props: Props): JSX.Element => {
     if (
       nextPublic &&
       !window.confirm(
-        'Anyone with the public link will be able to view this snippet and fetch /raw without a token.'
+        'Anyone with the public link will be able to view this snippet and fetch /raw without a token. Secret values are never filled into public links.'
       )
     ) {
       return;
     }
 
     patchSnippetFlags(id, { isPublic: nextPublic });
-  };
-
-  const runOnServer = async () => {
-    if (
-      !window.confirm(
-        `Run this snippet on the SnippyCode server? It will execute ${language} with a ${Math.round(
-          snippetRun.timeoutMs / 1000
-        )}s timeout.`
-      )
-    ) {
-      return;
-    }
-
-    setShowRunModal(true);
-    setRunning(true);
-    setRunError('');
-    setRunOutput(null);
-
-    try {
-      const res = await axios.post<
-        Response<{
-          ok: boolean;
-          timedOut: boolean;
-          exitCode: number | null;
-          stdout: string;
-          stderr: string;
-        }>
-      >(`/api/snippets/${id}/run`);
-      setRunOutput(res.data.data);
-    } catch (err) {
-      setRunError('Could not run this snippet on the server.');
-    } finally {
-      setRunning(false);
-    }
   };
 
   const generateRawToken = async () => {
@@ -165,9 +228,30 @@ export const SnippetDetails = (props: Props): JSX.Element => {
     <Card>
       <h5 className='card-title d-flex align-items-center justify-content-between'>
         {title}
-        <SnippetPin id={id} isPinned={isPinned} />
+        <span className='snippet-title-actions'>
+          <SnippetFavorite id={id} isFavorite={Boolean(personal?.isFavorite)} />
+          <SnippetPin id={id} isPinned={isPinned} />
+        </span>
       </h5>
       <p className='snippet-description'>{description}</p>
+
+      {sites.length > 0 && (
+        <label className='snippet-site-picker'>
+          <span>Site</span>
+          <select
+            className='form-control form-control-sm'
+            value={site?.id || ''}
+            onChange={e => setSelectedSiteId(Number(e.target.value) || null)}
+          >
+            <option value=''>No site (team values)</option>
+            {sites.map(item => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
 
       <div className='metric-row'>
         <span>Language</span>
@@ -203,6 +287,19 @@ export const SnippetDetails = (props: Props): JSX.Element => {
       <div className='metric-row'>
         <span>Last updated</span>
         <span>{updateDate.relative}</span>
+      </div>
+
+      <div className='metric-row'>
+        <span>Last used</span>
+        <span>{lastUsed}</span>
+      </div>
+
+      <div className='metric-row'>
+        <span>Usage</span>
+        <span className='snippet-usage'>
+          {usage?.views || 0} views · {usage?.copies || 0} copies ·{' '}
+          {usage?.rawFetches || 0} raw · {usage?.runs || 0} runs
+        </span>
       </div>
       <hr />
 
@@ -274,12 +371,21 @@ export const SnippetDetails = (props: Props): JSX.Element => {
 
         {canRun && (
           <Button
-            text='Run on server'
+            text={site ? `Run… (${site.name})` : 'Run…'}
             color='secondary'
             small
             outline
-            handler={runOnServer}
+            handler={() => setShowRunModal(true)}
           />
+        )}
+
+        {snippetAssist.enabled && (
+          <div className='ai-buttons'>
+            <Button text='Explain' color='secondary' small outline handler={() => setAiMode('explain')} />
+            {canEdit && (
+              <Button text='Convert…' color='secondary' small outline handler={() => setAiMode('convert')} />
+            )}
+          </div>
         )}
 
         <Button
@@ -299,12 +405,38 @@ export const SnippetDetails = (props: Props): JSX.Element => {
         />
 
         <Button
+          text='Run history'
+          color='secondary'
+          small
+          outline
+          handler={() => setShowRuns(true)}
+        />
+
+        <Button
           text='Copy code'
           color='secondary'
           small
-          handler={() => copy(code)}
+          handler={copyCode}
         />
+        {copyNotice && <p className='form-text mb-0 text-center'>{copyNotice}</p>}
       </div>
+
+      {showRuns && (
+        <div className='raw-modal-backdrop' role='dialog' aria-modal='true'>
+          <div className='raw-modal'>
+            <div className='raw-modal-header'>
+              <div>
+                <p className='eyebrow'>Run history</p>
+                <h3>{title}</h3>
+              </div>
+              <button type='button' onClick={() => setShowRuns(false)}>
+                Close
+              </button>
+            </div>
+            <RunHistory query={{ snippetId: id }} showSnippet={false} />
+          </div>
+        </div>
+      )}
 
       {showHistory && (
         <SnippetHistory
@@ -382,13 +514,61 @@ export const SnippetDetails = (props: Props): JSX.Element => {
                 Copy
               </button>
             </div>
+
+            <p className='eyebrow raw-modal-section'>Install</p>
+            {site && installUsesToken && (
+              <p className='form-text'>
+                Using <strong>{site.name}</strong> values (<code>site={site.slug}</code>).
+              </p>
+            )}
+            {!installUsesToken && publicSecrets.length > 0 && (
+              <p className='raw-token-notice'>
+                Public links never include secrets ({publicSecrets.map(v => v.name).join(', ')}).
+                Generate a token to fill them in.
+              </p>
+            )}
+            {installUsesToken && personalSecrets.length > 0 && (
+              <p className='raw-token-notice'>
+                Your personal secrets ({personalSecrets.map(v => v.name).join(', ')}) are not
+                sent in raw links. Team or site values are used instead.
+              </p>
+            )}
+            {missingVariables.length > 0 && (
+              <p className='raw-token-notice'>
+                Fill in {missingVariables.map(v => v.name).join(', ')} first. Empty
+                placeholders are sent as-is.
+              </p>
+            )}
+            {!isPublic && !rawToken && (
+              <p className='form-text'>
+                Generate a token below, or swap in the admin raw API key, before
+                running these.
+              </p>
+            )}
+            {installLines.map(line => (
+              <div className='raw-modal-row' key={line.label}>
+                <span>{line.label}</span>
+                <code>{line.command}</code>
+                <button type='button' onClick={() => copy(line.command)}>
+                  Copy
+                </button>
+              </div>
+            ))}
             <div className='raw-modal-row'>
-              <span>curl</span>
-              <code>{curlCommand}</code>
-              <button type='button' onClick={() => copy(curlCommand)}>
+              <span>SHA-256</span>
+              <code>{checksum || 'Calculating…'}</code>
+              <button
+                type='button'
+                onClick={() => copy(checksum)}
+                disabled={!checksum}
+              >
                 Copy
               </button>
             </div>
+            <p className='form-text'>
+              The checksum covers exactly what the install URL returns. The
+              server also sends it as the <code>X-Content-SHA256</code> header.
+            </p>
 
             <div className='profile-meta'>
               <span>Token</span>
@@ -431,39 +611,24 @@ export const SnippetDetails = (props: Props): JSX.Element => {
       )}
 
       {showRunModal && (
-        <div className='raw-modal-backdrop' role='dialog' aria-modal='true'>
-          <div className='raw-modal'>
-            <div className='raw-modal-header'>
-              <div>
-                <p className='eyebrow'>Server run</p>
-                <h3>{title}</h3>
-              </div>
-              <button type='button' onClick={() => setShowRunModal(false)}>
-                Close
-              </button>
-            </div>
-            {running && <p>Running…</p>}
-            {runError && <div className='alert alert-danger'>{runError}</div>}
-            {runOutput && (
-              <>
-                <div className='profile-meta'>
-                  <span>Result</span>
-                  <strong>
-                    {runOutput.timedOut
-                      ? 'Timed out'
-                      : runOutput.ok
-                      ? 'Exit 0'
-                      : `Exit ${runOutput.exitCode}`}
-                  </strong>
-                </div>
-                <label className='form-label'>stdout</label>
-                <pre className='run-output'>{runOutput.stdout || '(empty)'}</pre>
-                <label className='form-label'>stderr</label>
-                <pre className='run-output'>{runOutput.stderr || '(empty)'}</pre>
-              </>
-            )}
-          </div>
-        </div>
+        <SnippetRunModal
+          snippet={props.snippet}
+          site={site}
+          inputs={inputs}
+          onClose={() => {
+            setShowRunModal(false);
+            setSnippet(id);
+          }}
+        />
+      )}
+
+      {aiMode && (
+        <SnippetAiModal
+          snippet={props.snippet}
+          mode={aiMode}
+          canEdit={canEdit}
+          onClose={() => setAiMode(null)}
+        />
       )}
     </Card>
   );

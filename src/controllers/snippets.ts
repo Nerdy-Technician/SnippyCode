@@ -1,8 +1,10 @@
+import { createHash } from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 import { QueryTypes, Op } from 'sequelize';
 import { sequelize } from '../db';
 import { asyncWrapper, AuthenticatedRequest } from '../middleware';
 import {
+  DeviceModel,
   SnippetModel,
   Snippet_TagModel,
   SnippetVersionModel,
@@ -21,7 +23,6 @@ import {
   verifyTokenHash,
   isSnippetRunEnabled,
   runnerPublicSettings,
-  runSnippetCode,
   publicAiAssistStatus,
   runSnippetAssist,
   buildPowerShellRemoteCommand,
@@ -31,7 +32,23 @@ import {
   RawRefLookup,
   rawRefForSnippet,
   rawSlugForSnippet,
-  resolvePublicBaseUrl
+  resolvePublicBaseUrl,
+  attachSnippetUsage,
+  recordSnippetUsage,
+  setSnippetFavorite,
+  renderTemplate,
+  VARIABLE_NAME_PATTERN,
+  findAccessibleSite,
+  renderSnippetFor,
+  runAndRecord,
+  announceRun,
+  queueAgentJob,
+  lintAvailability,
+  lintCode,
+  deviceVariableValues,
+  explainSnippet,
+  convertSnippet,
+  searchByMeaning
 } from '../utils';
 import { getAiSettings } from '../utils/aiSettings';
 import { Body, SearchQuery, SnippetCreationAttributes } from '../typescript/interfaces';
@@ -77,6 +94,39 @@ const snapshotCurrentSnippet = async (
 
 const escapeIlike = (value: string): string =>
   value.replace(/[\\%_]/g, char => `\\${char}`);
+
+const withUsage = async <T extends { id: number }>(
+  req: AuthenticatedRequest,
+  snippet: T
+) => (await attachSnippetUsage([snippet], req.user?.id))[0];
+
+const trackUsage = (
+  snippetId: number,
+  kind: 'view' | 'copy' | 'raw' | 'run',
+  userId?: number | null
+): void => {
+  // Counters are best effort and never fail the request
+  recordSnippetUsage(snippetId, kind, userId).catch(() => undefined);
+};
+
+/**
+ * Explicit values for {{NAME}} placeholders, from a query string or JSON body.
+ */
+const readVariableValues = (input: unknown): Record<string, string> => {
+  const values: Record<string, string> = {};
+
+  if (!input || typeof input !== 'object') {
+    return values;
+  }
+
+  Object.entries(input as Record<string, unknown>).forEach(([name, value]) => {
+    if (VARIABLE_NAME_PATTERN.test(name) && typeof value === 'string') {
+      values[name] = value;
+    }
+  });
+
+  return values;
+};
 
 /**
  * Single source of truth for share visibility. /s/ (via
@@ -168,7 +218,7 @@ export const createSnippet = asyncWrapper(
     });
 
     res.status(201).json({
-      data: publicSnippet(rawSnippet, [...parsedRequestTags]),
+      data: await withUsage(req, publicSnippet(rawSnippet, [...parsedRequestTags])),
       warnings: secretFindings.map(finding => finding.label)
     });
   }
@@ -180,7 +230,7 @@ export const createSnippet = asyncWrapper(
  * @request GET
  */
 export const getAllSnippets = asyncWrapper(
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
     const snippets = await SnippetModel.findAll({
       include: {
         model: TagModel,
@@ -199,7 +249,7 @@ export const getAllSnippets = asyncWrapper(
     });
 
     res.status(200).json({
-      data: populatedSnippets
+      data: await attachSnippetUsage(populatedSnippets, req.user?.id)
     });
   }
 );
@@ -210,7 +260,7 @@ export const getAllSnippets = asyncWrapper(
  * @request GET
  */
 export const getSnippet = asyncWrapper(
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
     const snippet = await SnippetModel.findOne({
       where: { id: req.params.id },
       include: {
@@ -238,7 +288,7 @@ export const getSnippet = asyncWrapper(
     };
 
     res.status(200).json({
-      data: populatedSnippet
+      data: await withUsage(req, populatedSnippet)
     });
   }
 );
@@ -304,7 +354,7 @@ export const updateSnippet = asyncWrapper(
     });
 
     res.status(200).json({
-      data: publicSnippet(rawSnippet, [...parsedRequestTags]),
+      data: await withUsage(req, publicSnippet(rawSnippet, [...parsedRequestTags])),
       warnings: secretFindings.map(finding => finding.label)
     });
   }
@@ -435,37 +485,82 @@ export const getRawCode = asyncWrapper(
       return notFound();
     }
 
-    const shared = await SnippetModel.findOne({
-      where: sharedSnippetWhere(lookup),
-      order: [['id', 'ASC']],
-      raw: true
-    });
-
-    if (shared) {
-      return sendPlainText(res, shared.code);
-    }
-
     const token = String(req.query.key || req.header('x-api-key') || '');
+    const globalKeyOk = token ? await verifyRawApiKey(token) : false;
 
-    if (!token) {
-      return notFound();
-    }
+    // A valid snippet token or the admin raw API key unlocks private snippets
+    // and server-side values (site, team, secrets) for rendering
+    const tokenMatch = token
+      ? (
+          await SnippetModel.findAll({
+            where: lookup,
+            order: [['id', 'ASC']],
+            raw: true
+          })
+        ).find(candidate => globalKeyOk || verifyTokenHash(token, candidate.rawTokenHash))
+      : undefined;
 
-    const globalKeyOk = await verifyRawApiKey(token);
-    const candidates = await SnippetModel.findAll({
-      where: lookup,
-      order: [['id', 'ASC']],
-      raw: true
-    });
-    const snippet = candidates.find(
-      candidate => globalKeyOk || verifyTokenHash(token, candidate.rawTokenHash)
-    );
+    // Public snippets are served to anyone, exactly like the /s/ share page
+    const shared = tokenMatch
+      ? null
+      : await SnippetModel.findOne({
+          where: sharedSnippetWhere(lookup),
+          order: [['id', 'ASC']],
+          raw: true
+        });
+
+    const snippet = tokenMatch || shared;
 
     if (!snippet) {
       return notFound();
     }
 
-    sendPlainText(res, snippet.code);
+    const snippetTokenOk = Boolean(tokenMatch);
+
+    // ?render=0 returns the stored template. Otherwise placeholders are filled
+    // from query values, then site and team values including secrets (token or
+    // key holders only, so anonymous public fetches never see them), then
+    // inline defaults.
+    const authorized = snippetTokenOk || globalKeyOk;
+    const explicit = readVariableValues(req.query);
+    let siteId: number | null = null;
+
+    if (req.query.site !== undefined) {
+      if (!authorized) {
+        return next(new ErrorResponse(401, 'Site values need a snippet raw token or raw API key'));
+      }
+
+      // The admin API key reaches every site; a snippet token only open sites
+      const site = await findAccessibleSite(
+        { role: globalKeyOk ? 'admin' : undefined },
+        req.query.site
+      );
+
+      if (!site) {
+        return next(new ErrorResponse(404, 'Site was not found'));
+      }
+
+      siteId = site.id;
+    }
+
+    const body =
+      req.query.render === '0'
+        ? snippet.code
+        : authorized
+        ? (
+            await renderSnippetFor({
+              code: snippet.code,
+              siteId,
+              explicit,
+              includeSecrets: true
+            })
+          ).code
+        : renderTemplate(snippet.code, explicit);
+
+    trackUsage(snippet.id, 'raw');
+
+    res.set('X-Content-SHA256', createHash('sha256').update(body, 'utf8').digest('hex'));
+    sendPlainText(res, body);
   }
 );
 
@@ -591,6 +686,83 @@ export const runSnippet = asyncWrapper(
     res: Response,
     next: NextFunction
   ): Promise<void> => {
+    const snippet = await SnippetModel.findByPk(req.params.id);
+
+    if (!snippet) {
+      return next(new ErrorResponse(404, 'Snippet was not found'));
+    }
+
+    // Devices: queue a job for each chosen device (or every device at the site)
+    if (req.body?.deviceIds !== undefined) {
+      const site = await findAccessibleSite(req.user || {}, req.body?.siteId);
+
+      if (!site) {
+        return next(new ErrorResponse(400, 'Choose a site to run on its devices'));
+      }
+
+      const wanted = req.body.deviceIds === 'all'
+        ? undefined
+        : (Array.isArray(req.body.deviceIds) ? req.body.deviceIds : []).map(Number);
+      const devices = await DeviceModel.findAll({
+        where: {
+          siteId: site.id,
+          revokedAt: null,
+          ...(wanted ? { id: wanted.length ? wanted : [-1] } : {})
+        }
+      });
+
+      if (!devices.length) {
+        return next(new ErrorResponse(400, `${site.name} has no enrolled devices to run on`));
+      }
+
+      const jobs = [];
+      let secretsUsed: string[] = [];
+
+      // Each device gets its own DEVICE_* values
+      for (const device of devices) {
+        const rendered = await renderSnippetFor({
+          code: snippet.code,
+          userId: req.user?.id,
+          siteId: site.id,
+          explicit: readVariableValues(req.body?.variables),
+          deviceValues: deviceVariableValues(device, site.name),
+          includeSecrets: true
+        });
+        secretsUsed = rendered.secretsUsed;
+        jobs.push(
+          await queueAgentJob({
+            device,
+            snippet,
+            code: rendered.code,
+            secretValues: rendered.secretValues,
+            userId: req.user?.id
+          })
+        );
+      }
+
+      await auditLog('snippet.queued_on_devices', {
+        ...auditActor(req),
+        target: `snippet:${snippet.id}`,
+        metadata: {
+          site: site.name,
+          devices: devices.map(device => device.name),
+          secretsUsed
+        }
+      });
+
+      res.status(202).json({
+        data: {
+          jobs: jobs.map(job => ({
+            id: job.id,
+            deviceId: job.deviceId,
+            deviceName: devices.find(device => device.id === job.deviceId)?.name || null,
+            status: job.status
+          }))
+        }
+      });
+      return;
+    }
+
     if (!isSnippetRunEnabled()) {
       return next(
         new ErrorResponse(
@@ -600,26 +772,58 @@ export const runSnippet = asyncWrapper(
       );
     }
 
-    const snippet = await SnippetModel.findByPk(req.params.id);
+    const site = req.body?.siteId
+      ? await findAccessibleSite(req.user || {}, req.body.siteId)
+      : null;
 
-    if (!snippet) {
-      return next(new ErrorResponse(404, 'Snippet was not found'));
+    if (req.body?.siteId && !site) {
+      return next(new ErrorResponse(404, 'Site was not found'));
     }
 
     try {
-      const result = await runSnippetCode(snippet.language, snippet.code);
+      const rendered = await renderSnippetFor({
+        code: snippet.code,
+        userId: req.user?.id,
+        siteId: site?.id,
+        explicit: readVariableValues(req.body?.variables),
+        includeSecrets: true
+      });
+      const run = await runAndRecord({
+        snippet,
+        code: rendered.code,
+        secretValues: rendered.secretValues,
+        siteId: site?.id,
+        userId: req.user?.id
+      });
+      trackUsage(snippet.id, 'run', req.user?.id);
+      announceRun(run).catch(() => undefined);
       await auditLog('snippet.ran', {
         ...auditActor(req),
         target: `snippet:${snippet.id}`,
         metadata: {
           language: snippet.language,
-          ok: result.ok,
-          timedOut: result.timedOut,
-          exitCode: result.exitCode
+          ok: run.ok,
+          timedOut: run.timedOut,
+          exitCode: run.exitCode,
+          runId: run.id,
+          site: site?.name,
+          secretsUsed: rendered.secretsUsed
         }
       });
 
-      res.status(200).json({ data: result });
+      res.status(200).json({
+        data: {
+          runId: run.id,
+          ok: run.ok,
+          timedOut: run.timedOut,
+          exitCode: run.exitCode,
+          stdout: run.stdout,
+          stderr: run.stderr,
+          language: run.language,
+          durationMs: run.durationMs,
+          sandbox: run.sandbox
+        }
+      });
     } catch (err) {
       return next(
         new ErrorResponse(
@@ -754,7 +958,7 @@ export const restoreSnippetVersion = asyncWrapper(
     });
 
     res.status(200).json({
-      data: publicSnippet(rawSnippet, [...parsedTags])
+      data: await withUsage(req, publicSnippet(rawSnippet, [...parsedTags]))
     });
   }
 );
@@ -765,7 +969,7 @@ export const restoreSnippetVersion = asyncWrapper(
  * @request POST
  */
 export const searchSnippets = asyncWrapper(
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
     const { query, tags = [], languages, collections = [] } = <SearchQuery>req.body;
     const searchTags = Array.isArray(tags) ? tags : [];
     const searchLanguages = Array.isArray(languages) ? languages : [];
@@ -861,7 +1065,7 @@ export const searchSnippets = asyncWrapper(
       });
 
     res.status(200).json({
-      data: populatedSnippets
+      data: await attachSnippetUsage(populatedSnippets, req.user?.id)
     });
   }
 );
@@ -901,5 +1105,251 @@ export const renameCollection = asyncWrapper(
     res.status(200).json({
       data: { from, to, count }
     });
+  }
+);
+
+/**
+ * @description Record a view or copy for usage stats and the user's history
+ * @route /api/snippets/:id/activity
+ * @request POST
+ */
+export const recordSnippetActivity = asyncWrapper(
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+    const type = req.body?.type;
+
+    if (type !== 'view' && type !== 'copy') {
+      return next(new ErrorResponse(400, 'Activity type must be view or copy'));
+    }
+
+    const snippet = await SnippetModel.findByPk(req.params.id, { attributes: ['id'] });
+
+    if (!snippet) {
+      return next(new ErrorResponse(404, 'Snippet was not found'));
+    }
+
+    await recordSnippetUsage(snippet.id, type, req.user?.id);
+
+    res.status(200).json({ data: {} });
+  }
+);
+
+/**
+ * @description Star or unstar a snippet for the current user
+ * @route /api/snippets/:id/favorite
+ * @request PUT
+ */
+export const setFavorite = asyncWrapper(
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+    const snippet = await SnippetModel.findByPk(req.params.id, { attributes: ['id'] });
+
+    if (!snippet) {
+      return next(new ErrorResponse(404, 'Snippet was not found'));
+    }
+
+    const isFavorite = Boolean(req.body?.favorite);
+    await setSnippetFavorite(req.user!.id, snippet.id, isFavorite);
+
+    res.status(200).json({ data: { isFavorite } });
+  }
+);
+
+/**
+ * @description Fill a snippet's placeholders for the current user and site,
+ * secrets included. Used for copying so secrets never sit in the page.
+ * @route /api/snippets/:id/render
+ * @request POST
+ */
+export const renderSnippet = asyncWrapper(
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+    const snippet = await SnippetModel.findByPk(req.params.id);
+
+    if (!snippet) {
+      return next(new ErrorResponse(404, 'Snippet was not found'));
+    }
+
+    const site = req.body?.siteId
+      ? await findAccessibleSite(req.user || {}, req.body.siteId)
+      : null;
+
+    if (req.body?.siteId && !site) {
+      return next(new ErrorResponse(404, 'Site was not found'));
+    }
+
+    const rendered = await renderSnippetFor({
+      code: snippet.code,
+      userId: req.user?.id,
+      siteId: site?.id,
+      explicit: readVariableValues(req.body?.variables),
+      includeSecrets: true
+    });
+
+    if (req.body?.purpose === 'copy') {
+      trackUsage(snippet.id, 'copy', req.user?.id);
+
+      if (rendered.secretsUsed.length) {
+        await auditLog('variable.secret_used', {
+          ...auditActor(req),
+          target: `snippet:${snippet.id}`,
+          metadata: { title: snippet.title, site: site?.name, secrets: rendered.secretsUsed }
+        });
+      }
+    }
+
+    res.status(200).json({
+      data: {
+        code: rendered.code,
+        sha256: createHash('sha256').update(rendered.code, 'utf8').digest('hex'),
+        secretsUsed: rendered.secretsUsed,
+        missing: rendered.missing
+      }
+    });
+  }
+);
+
+/**
+ * @description Lint code with shellcheck, ruff, or PSScriptAnalyzer
+ * @route /api/snippets/lint
+ * @request POST
+ */
+export const lintSnippet = asyncWrapper(
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+    const language = String(req.body?.language || '');
+    const code = typeof req.body?.code === 'string' ? req.body.code : '';
+
+    if (code.length > 100_000) {
+      return next(new ErrorResponse(400, 'Code is too large to lint'));
+    }
+
+    res.status(200).json({ data: await lintCode(language, code) });
+  }
+);
+
+export const getLintTools = asyncWrapper(
+  async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+    res.status(200).json({ data: lintAvailability() });
+  }
+);
+
+const aiError = (err: unknown) =>
+  new ErrorResponse(400, err instanceof Error ? err.message : 'The AI assistant failed');
+
+/**
+ * @description Explain what a snippet does and what could go wrong
+ * @route /api/snippets/:id/explain
+ * @request POST
+ */
+export const explainSnippetRoute = asyncWrapper(
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+    const snippet = await SnippetModel.findByPk(req.params.id);
+
+    if (!snippet) {
+      return next(new ErrorResponse(404, 'Snippet was not found'));
+    }
+
+    try {
+      const { provider, result } = await explainSnippet({
+        provider: req.body?.provider,
+        snippet: {
+          title: snippet.title,
+          description: snippet.description,
+          language: snippet.language,
+          code: snippet.code
+        }
+      });
+
+      await auditLog('snippet.explained', {
+        ...auditActor(req),
+        target: `snippet:${snippet.id}`,
+        metadata: { provider }
+      });
+
+      res.status(200).json({ data: { provider, ...result } });
+    } catch (err) {
+      next(aiError(err));
+    }
+  }
+);
+
+/**
+ * @description Convert a snippet to another language (returns the code; the
+ * editor decides whether to save it as a new snippet)
+ * @route /api/snippets/:id/convert
+ * @request POST
+ */
+export const convertSnippetRoute = asyncWrapper(
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+    const snippet = await SnippetModel.findByPk(req.params.id);
+
+    if (!snippet) {
+      return next(new ErrorResponse(404, 'Snippet was not found'));
+    }
+
+    try {
+      const { provider, result } = await convertSnippet({
+        provider: req.body?.provider,
+        targetLanguage: req.body?.language,
+        snippet: {
+          title: snippet.title,
+          description: snippet.description,
+          language: snippet.language,
+          code: snippet.code
+        }
+      });
+
+      await auditLog('snippet.converted', {
+        ...auditActor(req),
+        target: `snippet:${snippet.id}`,
+        metadata: { provider, from: snippet.language, to: result.language }
+      });
+
+      res.status(200).json({ data: { provider, ...result } });
+    } catch (err) {
+      next(aiError(err));
+    }
+  }
+);
+
+/**
+ * @description Find snippets by meaning with the AI assistant
+ * @route /api/snippets/search/meaning
+ * @request POST
+ */
+export const searchByMeaningRoute = asyncWrapper(
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+    const snippets = await SnippetModel.findAll({
+      include: { model: TagModel, as: 'tags', attributes: ['name'], through: { attributes: [] } },
+      order: [['updatedAt', 'DESC']]
+    });
+
+    try {
+      const { provider, results } = await searchByMeaning({
+        provider: req.body?.provider,
+        query: req.body?.query,
+        entries: snippets.map(snippet => {
+          const plain = snippet.get({ plain: true });
+
+          return {
+            id: plain.id,
+            title: plain.title,
+            description: plain.description,
+            language: plain.language,
+            collection: plain.collection,
+            tags: plain.tags?.map(tag => tag.name),
+            code: plain.code
+          };
+        })
+      });
+      const byId = new Map(snippets.map(snippet => [snippet.id, snippet.get({ plain: true })]));
+      const matches = results
+        .filter(result => byId.has(result.id))
+        .map(result => {
+          const plain = byId.get(result.id)!;
+          return { ...publicSnippet(plain, plain.tags?.map(tag => tag.name)), reason: result.reason };
+        });
+
+      res.status(200).json({ data: { provider, results: await attachSnippetUsage(matches, req.user?.id) } });
+    } catch (err) {
+      next(aiError(err));
+    }
   }
 );

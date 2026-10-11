@@ -17,6 +17,14 @@ import {
   runSnippet,
   searchSnippets,
   assistSnippet,
+  recordSnippetActivity,
+  lintSnippet,
+  getLintTools,
+  explainSnippetRoute,
+  convertSnippetRoute,
+  searchByMeaningRoute,
+  renderSnippet,
+  setFavorite,
   updateSnippet
 } from '../controllers/snippets';
 import {
@@ -47,10 +55,15 @@ snippetRouter
 
 snippetRouter.route('/statistics/count').get(requireAuth, countTags);
 snippetRouter.route('/search').post(requireAuthOrRawApiKey, searchSnippets);
+snippetRouter.route('/search/meaning').post(requireAuth, searchByMeaningRoute);
 snippetRouter
   .route('/collections/rename')
   .post(requireAuth, requireMinimumRole('editor'), renameCollection);
 snippetRouter.route('/runner').get(requireAuth, getSnippetRunner);
+snippetRouter
+  .route('/lint')
+  .get(requireAuth, getLintTools)
+  .post(requireAuth, requireMinimumRole('editor'), lintSnippet);
 snippetRouter
   .route('/assist')
   .post(requireAuth, requireMinimumRole('editor'), assistSnippet);
@@ -90,3 +103,23 @@ snippetRouter
 snippetRouter
   .route('/:id/run')
   .post(requireAuth, validateSnippetId, requireMinimumRole('editor'), runSnippet);
+
+snippetRouter
+  .route('/:id/activity')
+  .post(requireAuth, validateSnippetId, recordSnippetActivity);
+
+snippetRouter
+  .route('/:id/favorite')
+  .put(requireAuth, validateSnippetId, setFavorite);
+
+snippetRouter
+  .route('/:id/render')
+  .post(requireAuth, validateSnippetId, renderSnippet);
+
+snippetRouter
+  .route('/:id/explain')
+  .post(requireAuth, validateSnippetId, explainSnippetRoute);
+
+snippetRouter
+  .route('/:id/convert')
+  .post(requireAuth, validateSnippetId, requireMinimumRole('editor'), convertSnippetRoute);

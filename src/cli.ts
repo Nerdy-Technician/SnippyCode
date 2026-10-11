@@ -15,7 +15,8 @@ Commands:
   list                 List snippets
   get <id>             Show one snippet as JSON
   search <query>       Search titles, docs, and code
-  raw <id-or-slug>     Print snippet code
+  raw <id-or-slug>     Print snippet code, filling {{NAME}} placeholders
+                       Pass --var NAME=VALUE (repeatable) to set values
 
 Environment:
   SNIPPYCODE_URL       Base URL, for example https://snippycode.example
@@ -34,7 +35,7 @@ const argValue = (flag: string): string => {
 
 const positional = (): string[] => {
   const args = process.argv.slice(2);
-  const skip = new Set(['--url', '--key']);
+  const skip = new Set(['--url', '--key', '--var']);
   const values: string[] = [];
 
   for (let i = 0; i < args.length; i += 1) {
@@ -47,6 +48,28 @@ const positional = (): string[] => {
   }
 
   return values;
+};
+
+const varValues = (): URLSearchParams => {
+  const params = new URLSearchParams();
+  const args = process.argv.slice(2);
+
+  args.forEach((arg, index) => {
+    if (arg !== '--var') {
+      return;
+    }
+
+    const pair = String(args[index + 1] || '');
+    const separator = pair.indexOf('=');
+
+    if (separator < 1) {
+      fail(`Expected --var NAME=VALUE, got "${pair}"`);
+    }
+
+    params.append(pair.slice(0, separator), pair.slice(separator + 1));
+  });
+
+  return params;
 };
 
 const requestJson = (url: string, key: string, method = 'GET', body?: unknown): Promise<Json> =>
@@ -228,8 +251,9 @@ const main = async (): Promise<void> => {
       fail('Usage: snippycode raw <id-or-slug>');
     }
 
+    const query = varValues().toString();
     const text = await requestText(
-      `${baseUrl}/raw/${encodeURIComponent(rawRef)}`,
+      `${baseUrl}/raw/${encodeURIComponent(rawRef)}${query ? `?${query}` : ''}`,
       key
     );
     process.stdout.write(text.endsWith('\n') ? text : `${text}\n`);

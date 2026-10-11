@@ -2,6 +2,7 @@ import axios from 'axios';
 import { createContext, useCallback, useEffect, useState } from 'react';
 import {
   AuthStatus,
+  RunnerSettings,
   AuthUser,
   Response,
   SetupPayload
@@ -14,11 +15,7 @@ interface AuthContextValue {
   localLoginEnabled: boolean;
   oidcProviderName: string;
   user: AuthUser | null;
-  snippetRun: {
-    enabled: boolean;
-    languages: string[];
-    timeoutMs: number;
-  };
+  snippetRun: RunnerSettings;
   snippetAssist: {
     enabled: boolean;
     providers: { id: 'openai' | 'anthropic'; label: string }[];
@@ -72,9 +69,9 @@ export const AuthContextProvider = (props: Props): JSX.Element => {
   const [localLoginEnabled, setLocalLoginEnabled] = useState(true);
   const [oidcProviderName, setOidcProviderName] = useState('Keycloak');
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [snippetRun, setSnippetRun] = useState({
+  const [snippetRun, setSnippetRun] = useState<RunnerSettings>({
     enabled: false,
-    languages: [] as string[],
+    languages: [],
     timeoutMs: 15000
   });
   const [snippetAssist, setSnippetAssist] = useState({

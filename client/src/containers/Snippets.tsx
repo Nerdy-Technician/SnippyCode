@@ -4,13 +4,29 @@ import { AuthContext, SnippetsContext } from '../store';
 import { SnippetGrid } from '../components/Snippets/SnippetGrid';
 import { Button, Card, EmptyState, Layout } from '../components/UI';
 import { SearchBar } from '../components/SearchBar';
+import { MeaningSearch } from '../components/Snippets/MeaningSearch';
 import { canEditSnippets } from '../utils';
 import { Snippet } from '../typescript/interfaces';
 
 const collectionName = (value?: string | null): string =>
   (value || 'General').trim() || 'General';
 
-type LibrarySort = 'updated' | 'title' | 'language';
+type LibrarySort = 'updated' | 'title' | 'language' | 'used';
+type LibraryShow = 'favorites' | 'stale';
+
+const STALE_AFTER_MS = 180 * 24 * 60 * 60 * 1000;
+
+const useCount = (snippet: Snippet): number =>
+  (snippet.usage?.views || 0) +
+  (snippet.usage?.copies || 0) +
+  (snippet.usage?.rawFetches || 0) +
+  (snippet.usage?.runs || 0);
+
+// Not viewed, copied, fetched, or run in six months (or ever, if that old)
+const isStale = (snippet: Snippet, now = Date.now()): boolean => {
+  const lastTouched = snippet.usage?.lastUsedAt || snippet.updatedAt || snippet.createdAt;
+  return now - new Date(lastTouched).getTime() > STALE_AFTER_MS;
+};
 
 const sortSnippets = (items: Snippet[], sort: LibrarySort): Snippet[] => {
   const next = [...items];
@@ -18,6 +34,10 @@ const sortSnippets = (items: Snippet[], sort: LibrarySort): Snippet[] => {
   next.sort((a, b) => {
     if (sort === 'title') {
       return a.title.localeCompare(b.title);
+    }
+
+    if (sort === 'used') {
+      return useCount(b) - useCount(a) || a.title.localeCompare(b.title);
     }
 
     if (sort === 'language') {
@@ -43,7 +63,7 @@ export const Snippets = (): JSX.Element => {
     searchActive,
     renameCollection
   } = useContext(SnippetsContext);
-  const { user } = useContext(AuthContext);
+  const { user, snippetAssist } = useContext(AuthContext);
   const canEdit = canEditSnippets(user?.role);
   const history = useHistory();
   const location = useLocation();
@@ -52,6 +72,7 @@ export const Snippets = (): JSX.Element => {
   const tagFilter = params.get('tag');
   const languageFilter = params.get('lang');
   const sort = (params.get('sort') as LibrarySort) || 'updated';
+  const showFilter = params.get('show') as LibraryShow | null;
 
   useEffect(() => {
     getSnippets();
@@ -63,6 +84,7 @@ export const Snippets = (): JSX.Element => {
     tag?: string | null;
     lang?: string | null;
     sort?: LibrarySort | null;
+    show?: LibraryShow | null;
   }) => {
     const query = new URLSearchParams(location.search);
     const collection =
@@ -70,6 +92,13 @@ export const Snippets = (): JSX.Element => {
     const tag = next.tag === undefined ? tagFilter : next.tag;
     const lang = next.lang === undefined ? languageFilter : next.lang;
     const nextSort = next.sort === undefined ? sort : next.sort;
+    const show = next.show === undefined ? showFilter : next.show;
+
+    if (show) {
+      query.set('show', show);
+    } else {
+      query.delete('show');
+    }
 
     if (collection) {
       query.set('collection', collection);
@@ -128,6 +157,9 @@ export const Snippets = (): JSX.Element => {
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [snippets]);
 
+  const favoriteCount = snippets.filter(snippet => snippet.personal?.isFavorite).length;
+  const staleCount = useMemo(() => snippets.filter(snippet => isStale(snippet)).length, [snippets]);
+
   const visibleSnippets = sortSnippets(
     (searchActive ? searchResults : snippets).filter(snippet => {
       const matchesCollection =
@@ -136,8 +168,12 @@ export const Snippets = (): JSX.Element => {
       const matchesTag = !tagFilter || (snippet.tags || []).includes(tagFilter);
       const matchesLanguage =
         !languageFilter || snippet.language === languageFilter;
+      const matchesShow =
+        !showFilter ||
+        (showFilter === 'favorites' && Boolean(snippet.personal?.isFavorite)) ||
+        (showFilter === 'stale' && isStale(snippet));
 
-      return matchesCollection && matchesTag && matchesLanguage;
+      return matchesCollection && matchesTag && matchesLanguage && matchesShow;
     }),
     sort
   );
@@ -169,6 +205,35 @@ export const Snippets = (): JSX.Element => {
               <div className='metric-row'>
                 <span>Total</span>
                 <span>{snippets.length}</span>
+              </div>
+              <hr />
+
+              <h5 className='card-title'>Show</h5>
+              <div
+                className={`tag-filter ${!showFilter ? 'is-active' : ''}`}
+                onClick={() => setLibraryFilter({ show: null })}
+              >
+                <span>Everything</span>
+                <span>{snippets.length}</span>
+              </div>
+              <div
+                className={`tag-filter ${showFilter === 'favorites' ? 'is-active' : ''}`}
+                onClick={() =>
+                  setLibraryFilter({ show: showFilter === 'favorites' ? null : 'favorites' })
+                }
+              >
+                <span>My favorites</span>
+                <span>{favoriteCount}</span>
+              </div>
+              <div
+                className={`tag-filter ${showFilter === 'stale' ? 'is-active' : ''}`}
+                onClick={() =>
+                  setLibraryFilter({ show: showFilter === 'stale' ? null : 'stale' })
+                }
+                title='Not viewed, copied, fetched, or run in 6 months. Candidates to review or archive.'
+              >
+                <span>Unused 6+ months</span>
+                <span>{staleCount}</span>
               </div>
               <hr />
 
@@ -272,7 +337,8 @@ export const Snippets = (): JSX.Element => {
                     setLibraryFilter({
                       collection: null,
                       tag: null,
-                      lang: null
+                      lang: null,
+                      show: null
                     })
                   }
                 />
@@ -297,10 +363,12 @@ export const Snippets = (): JSX.Element => {
                     <option value='updated'>Last updated</option>
                     <option value='title'>Title</option>
                     <option value='language'>Language</option>
+                    <option value='used'>Most used</option>
                   </select>
                 </label>
               </div>
               <SearchBar autoFocus={false} />
+              {snippetAssist.enabled && <MeaningSearch />}
               <div className='library-results'>
                 {searchActive && visibleSnippets.length === 0 ? (
                   <p className='text-muted mb-0'>No matching snippets.</p>

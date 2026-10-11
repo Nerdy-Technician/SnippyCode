@@ -4,22 +4,24 @@ import { Snippet } from '../../typescript/interfaces';
 import { canEditSnippets, dateParser, badgeColor } from '../../utils';
 import { Badge, Button, Card } from '../UI';
 import { AuthContext, SnippetsContext } from '../../store';
-import copy from 'clipboard-copy';
 import { SnippetPin } from './SnippetPin';
+import { SnippetFavorite } from './SnippetFavorite';
 
 interface Props {
   snippet: Snippet;
 }
 
 export const SnippetCard = (props: Props): JSX.Element => {
-  const { title, description, language, code, id, createdAt, isPinned, collection } =
+  const { title, description, language, id, createdAt, isPinned, collection, personal } =
     props.snippet;
-  const { setSnippet, duplicateSnippet } = useContext(SnippetsContext);
+  const { setSnippet, duplicateSnippet, copySnippetCode, selectedSiteId } =
+    useContext(SnippetsContext);
   const { user } = useContext(AuthContext);
   const canEdit = canEditSnippets(user?.role);
 
+  // Filled in on the server with saved values for the chosen site
   const copyHandler = () => {
-    copy(code);
+    copySnippetCode(props.snippet, { siteId: selectedSiteId }).catch(() => undefined);
   };
 
   return (
@@ -35,7 +37,10 @@ export const SnippetCard = (props: Props): JSX.Element => {
         >
           {title}
         </Link>
-        <SnippetPin id={id} isPinned={isPinned} />
+        <span className='snippet-title-actions'>
+          <SnippetFavorite id={id} isFavorite={Boolean(personal?.isFavorite)} />
+          <SnippetPin id={id} isPinned={isPinned} />
+        </span>
       </h5>
 
       <h6 className='card-subtitle mb-2 text-muted'>

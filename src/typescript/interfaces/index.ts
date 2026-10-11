@@ -9,3 +9,4 @@ export * from './Setting';
 export * from './Task';
 export * from './AuditLog';
 export * from './SnippetVersion';
+export * from './Variable';

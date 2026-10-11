@@ -1,24 +1,23 @@
-# SnippyCode v1.2.1 Release Notes
+# SnippyCode v1.2.2 Release Notes
 
-Release version: `v1.2.1`
+Release version: `v1.2.2`
 
 ## Highlights
 
-- Fixed: public `/s/` pages started with several screens of empty panels, with the code far down the page in a narrow column. The title card sat in the same column as the code, and cards are full height, so the card grew to the height of the code. The page now puts the title and actions cards side by side and the code in its own full-width row. The title, raw link, PowerShell one-liner and the start of the code fit on the first screen on desktop and on phones.
-- Public pages also show the snippet's tags and when it was last updated.
+- New: sites, devices and a Linux/Windows agent. Enrol devices with one-time tokens, collect device facts, run device tools, and queue snippets on devices.
+- New: runbooks (ordered multi-step runs), run history, and cron schedules with preview and run-now.
+- New: global and per-site variables, encrypted secret variables and `{{template}}` substitution in snippets.
+- New: monitoring policies with patch windows, auto-resolving alerts and device metrics.
+- New: outgoing webhooks (Discord, Slack, generic) with delivery history.
+- New: backups from the admin UI and the `snippycode-backup` CLI (`npm run backup`), optionally encrypted.
+- Snippets: favourites, usage stats, meaning search, linting and a command palette.
+- `/raw/:slug` fills `{{variables}}` before serving (`?render=0` returns the stored template) and sends `X-Content-SHA256`.
 
-## Included from v1.2.0
+See `CHANGELOG.md` for the full list.
 
-- Fixed: shared links (`/s/:slug`) stopped working after an unrelated change. Pinning a snippet from a library view that was loaded before the snippet was made public, or any update that did not resend the public flag (another tab, a script, the API), silently turned the snippet private again. Pin and public toggles now change only that flag, and updates keep fields they do not send.
-- Fixed: the pin on a snippet page did nothing after a page reload.
-- Fixed: the logo on public `/s/` pages rendered at full size and pushed the snippet below the fold.
-- Slugs with dots, such as `purge-onedrive-from-windows.powershell` or `1.5`, are always looked up as slugs. Only plain whole numbers are treated as snippet ids.
-- New: PowerShell remote execute. Public PowerShell snippets show a copyable `irm https://<host>/raw/<slug> | iex` one-liner on the share dialog and the public page, with a safety note. Only run scripts you trust; this runs the code directly on your machine.
-- `/raw/:slug` returns the snippet body only, as `text/plain; charset=utf-8` with `nosniff` and `no-store`.
-- Making a snippet public or private is written to the audit log (`snippet.visibility_changed`).
-- New: an About page at `/about`, linked from the navigation bar and public snippet pages. It shows the version, the main features, and links to the source code and release notes. Anyone can open it; no sign-in needed.
-- New optional `PUBLIC_BASE_URL` setting for share links and the one-liner.
-- CI now runs lint, typecheck, tests and build on every pull request and push to `main`, plus a Docker image build check.
+## Included from v1.2.1 and v1.2.0
+
+- Public `/s/` page layout fix, share link fixes, PowerShell remote execute, About page, `PUBLIC_BASE_URL`, and CI checks. See `CHANGELOG.md`.
 
 ## Container Image
 
@@ -38,6 +37,8 @@ Supported platforms:
 
 ## Upgrade Notes
 
+- v1.2.2: database migrations 10 to 15 run on startup (variables, sites, runbooks, runs, devices, schedules, webhooks, monitoring). Back up first.
+- v1.2.2: set `VARIABLES_SECRET_KEY` once and keep it; it encrypts secret variables (falls back to `SESSION_SECRET` when empty).
 - v1.2.1: no database migration or configuration change.
 - No database migration.
 - `/raw/:slug` now answers `404` instead of `401` when a private snippet is requested without a valid token, so private snippets look the same as missing ones. Valid snippet tokens and the admin raw API key work as before.

@@ -13,8 +13,8 @@ import copy from 'clipboard-copy';
 import axios from 'axios';
 import { useHistory } from 'react-router-dom';
 import { AuthContext, SnippetsContext, ThemeContext } from '../../store';
-import { NewSnippet, Response } from '../../typescript/interfaces';
-import { readRawToken } from '../../utils';
+import { LintResult, NewSnippet, Response } from '../../typescript/interfaces';
+import { findTemplateVariables, readRawToken } from '../../utils';
 import { Button, Card } from '../UI';
 import { SnippetDocs } from './SnippetDocs';
 import languagesData from '../../data/languages.json';
@@ -30,6 +30,7 @@ interface LanguageOption {
 
 const availableLanguages = languagesData.languages as LanguageOption[];
 type EditorInstance = Parameters<OnMount>[0];
+type MonacoInstance = Parameters<OnMount>[1];
 type DetectedLanguage = {
   language: string;
   confidence: number;
@@ -176,6 +177,9 @@ export const SnippetForm = (props: Props): JSX.Element => {
     snippetAssist.enabled || snippetAssist.providers.length > 0;
   const history = useHistory();
   const editorRef = useRef<EditorInstance | null>(null);
+  const monacoRef = useRef<MonacoInstance | null>(null);
+  const [editorReady, setEditorReady] = useState(false);
+  const [lint, setLint] = useState<LintResult | null>(null);
   const [languageWasManual, setLanguageWasManual] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
@@ -265,8 +269,68 @@ export const SnippetForm = (props: Props): JSX.Element => {
     });
   };
 
-  const editorMountHandler: OnMount = editor => {
+  const editorMountHandler: OnMount = (editor, monaco) => {
     editorRef.current = editor;
+    monacoRef.current = monaco;
+    setEditorReady(true);
+  };
+
+  // Lint shortly after typing stops and show findings inline
+  useEffect(() => {
+    if (!editorReady) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      axios
+        .post<Response<LintResult>>('/api/snippets/lint', {
+          language: formData.language,
+          code: formData.code
+        })
+        .then(res => setLint(res.data.data))
+        .catch(() => setLint(null));
+    }, 700);
+
+    return () => window.clearTimeout(timer);
+  }, [formData.code, formData.language, editorReady]);
+
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    const model = editorRef.current?.getModel();
+
+    if (!monaco || !model) {
+      return;
+    }
+
+    const severity = {
+      error: monaco.MarkerSeverity.Error,
+      warning: monaco.MarkerSeverity.Warning,
+      info: monaco.MarkerSeverity.Info
+    };
+
+    monaco.editor.setModelMarkers(
+      model,
+      'snippycode-lint',
+      (lint?.diagnostics || []).map(item => ({
+        startLineNumber: item.line,
+        startColumn: item.column,
+        endLineNumber: item.endLine,
+        endColumn: Math.max(item.endColumn, item.column + 1),
+        severity: severity[item.severity],
+        message: `${item.message} (${item.code})`,
+        source: lint?.tool || 'lint'
+      }))
+    );
+  }, [lint]);
+
+  const jumpTo = (line: number, column: number) => {
+    const editor = editorRef.current;
+
+    if (editor) {
+      editor.revealLineInCenter(line);
+      editor.setPosition({ lineNumber: line, column });
+      editor.focus();
+    }
   };
 
   const formatCodeHandler = () => {
@@ -468,6 +532,7 @@ export const SnippetForm = (props: Props): JSX.Element => {
     return formData.tags.join(',');
   };
   const secretWarnings = detectSecrets(formData.code, formData.docs || '');
+  const templateVariables = findTemplateVariables(formData.code);
 
   const formHandler = (e: FormEvent) => {
     e.preventDefault();
@@ -482,6 +547,17 @@ export const SnippetForm = (props: Props): JSX.Element => {
         `Possible secrets detected: ${secretWarnings.join(
           ', '
         )}. Save anyway?`
+      )
+    ) {
+      return;
+    }
+
+    const lintErrors = (lint?.diagnostics || []).filter(item => item.severity === 'error');
+
+    if (
+      lintErrors.length > 0 &&
+      !window.confirm(
+        `${lint?.tool} found ${lintErrors.length} error${lintErrors.length === 1 ? '' : 's'}, e.g. line ${lintErrors[0].line}: ${lintErrors[0].message}. Save anyway?`
       )
     ) {
       return;
@@ -622,6 +698,51 @@ export const SnippetForm = (props: Props): JSX.Element => {
                   }}
                 />
               </div>
+              {lint?.available && (
+                <div className='lint-panel'>
+                  <p className='lint-summary'>
+                    <strong>{lint.tool}</strong>{' '}
+                    {lint.diagnostics.length === 0
+                      ? 'found nothing to fix.'
+                      : `found ${lint.diagnostics.length} issue${lint.diagnostics.length === 1 ? '' : 's'}.`}
+                    {lint.error && <span className='text-warning'> {lint.error}</span>}
+                  </p>
+                  {lint.diagnostics.length > 0 && (
+                    <ul className='lint-list'>
+                      {lint.diagnostics.slice(0, 30).map((item, index) => (
+                        <li key={index}>
+                          <button type='button' onClick={() => jumpTo(item.line, item.column)}>
+                            <span className={`lint-severity is-${item.severity}`}>{item.severity}</span>
+                            <span className='lint-where'>
+                              {item.line}:{item.column}
+                            </span>
+                            <span className='lint-message'>{item.message}</span>
+                            <code>{item.code}</code>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+              <p className='form-text editor-variables-hint'>
+                {templateVariables.length > 0 ? (
+                  <>
+                    Variables:{' '}
+                    {templateVariables.map(variable => (
+                      <code key={variable.name}>
+                        {variable.name}
+                        {variable.defaultValue !== null ? `=${variable.defaultValue}` : ''}
+                      </code>
+                    ))}
+                  </>
+                ) : (
+                  <>
+                    Tip: write <code>{'{{HOST}}'}</code> or <code>{'{{VERSION:1.2.0}}'}</code> to
+                    fill values in when copying or fetching raw.
+                  </>
+                )}
+              </p>
             </Card>
           </div>
 

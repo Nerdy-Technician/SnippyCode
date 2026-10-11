@@ -13,10 +13,28 @@ export interface NewSnippet {
   isPublic?: boolean;
 }
 
+export interface SnippetUsage {
+  views: number;
+  copies: number;
+  rawFetches: number;
+  runs: number;
+  lastUsedAt: string | null;
+}
+
+export interface PersonalUsage {
+  isFavorite: boolean;
+  views: number;
+  copies: number;
+  lastViewedAt: string | null;
+  lastCopiedAt: string | null;
+}
+
 export interface Snippet extends Model, NewSnippet {
   rawSlug?: string | null;
   rawTokenPrefix?: string | null;
   rawTokenConfigured?: boolean;
+  usage?: SnippetUsage;
+  personal?: PersonalUsage;
 }
 
 export interface SnippetVersion extends Model {

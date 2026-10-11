@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import multer from 'multer';
 import {
   createUser,
   deleteUser,
@@ -23,7 +24,18 @@ import {
   updateUser,
   uploadSnippetsToGithub
 } from '../controllers/admin';
+import {
+  createBackup,
+  downloadBackup,
+  getBackups,
+  removeBackup,
+  restoreBackup,
+  runBackupNow,
+  updateBackupSchedule
+} from '../controllers/backups';
 import { requireAuth, requireOwner } from '../middleware';
+
+const backupUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 512 * 1024 * 1024, files: 1 } });
 
 export const adminRouter = Router();
 
@@ -49,3 +61,8 @@ adminRouter.route('/ai/anthropic/login').post(completeAnthropicAiLogin);
 adminRouter.route('/ai/:provider/login').delete(disconnectAiLogin);
 adminRouter.route('/users').post(createUser);
 adminRouter.route('/users/:id').patch(updateUser).delete(deleteUser);
+adminRouter.route('/backups').get(getBackups).post(createBackup);
+adminRouter.route('/backups/schedule').put(updateBackupSchedule);
+adminRouter.route('/backups/run').post(runBackupNow);
+adminRouter.route('/backups/restore').post(backupUpload.single('file'), restoreBackup);
+adminRouter.route('/backups/:name').get(downloadBackup).delete(removeBackup);

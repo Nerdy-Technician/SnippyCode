@@ -27,12 +27,16 @@ FROM node:25-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
+# Interpreters for server runs, bubblewrap to sandbox them, and linters
+RUN apk add --no-cache bash python3 bubblewrap shellcheck ruff
+
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/build ./build
 COPY --from=build /app/public ./public
-RUN mkdir -p data
+COPY agent ./agent
+RUN mkdir -p data/backups
 
 EXPOSE 5000
 

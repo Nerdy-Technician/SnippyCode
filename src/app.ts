@@ -10,6 +10,14 @@ import { getRawCode } from './controllers/snippets';
 import { authRouter } from './routes/auth';
 import { taskRouter } from './routes/tasks';
 import { adminRouter } from './routes/admin';
+import { variableRouter } from './routes/variables';
+import { siteRouter } from './routes/sites';
+import { runRouter } from './routes/runs';
+import { runbookRouter } from './routes/runbooks';
+import { agentRouter, deviceRouter } from './routes/devices';
+import { scheduleRouter } from './routes/schedules';
+import { notificationRouter } from './routes/notifications';
+import { alertRouter, policyRouter } from './routes/monitoring';
 
 export interface AppOptions {
   /** Directories that may contain the built client (index.html + assets). */
@@ -36,6 +44,10 @@ export const createApp = (options: AppOptions = {}): Express => {
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
   app.use(securityHeaders);
+  // Agents send whole inventories (software lists, event logs); give them room
+  app.use('/api/agent', express.json({ limit: '4mb', type: 'application/json' }));
+  // File uploads to devices travel as base64 in the tool request
+  app.use('/api/devices', express.json({ limit: '2mb', type: 'application/json' }));
   app.use(express.json({ limit: '256kb', type: 'application/json' }));
   app.use(cookieParser());
   clientDirs.forEach(dir => app.use(express.static(dir)));
@@ -46,6 +58,23 @@ export const createApp = (options: AppOptions = {}): Express => {
   app.get('/raw/:rawRef', getRawCode);
   app.use('/api/tasks', taskRouter);
   app.use('/api/admin', adminRouter);
+  app.use('/api/variables', variableRouter);
+  app.use('/api/sites', siteRouter);
+  app.use('/api/runs', runRouter);
+  app.use('/api/runbooks', runbookRouter);
+  app.use('/api/devices', deviceRouter);
+  app.use('/api/schedules', scheduleRouter);
+  app.use('/api/notifications', notificationRouter);
+  app.use('/api/alerts', alertRouter);
+  app.use('/api/policies', policyRouter);
+  app.use('/api/agent', express.urlencoded({ extended: false, limit: '256kb' }), agentRouter);
+  // Agent install scripts and the agents themselves
+  app.use(
+    '/agent',
+    express.static(join(__dirname, '../agent'), {
+      setHeaders: res => res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+    })
+  );
 
   // Serve client code
   app.get(/^\/(?!api)/, (req: Request, res: Response) => {

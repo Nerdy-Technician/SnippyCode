@@ -35,7 +35,53 @@ export const AUDIT_ACTIONS: { id: string; label: string }[] = [
   { id: 'snippet.raw_token.generated', label: 'Generated raw token' },
   { id: 'snippet.raw_token.revoked', label: 'Revoked raw token' },
   { id: 'snippet.restored', label: 'Restored snippet version' },
-  { id: 'collection.renamed', label: 'Renamed collection' }
+  { id: 'collection.renamed', label: 'Renamed collection' },
+  { id: 'variable.created', label: 'Created team variable' },
+  { id: 'variable.updated', label: 'Updated team variable' },
+  { id: 'variable.deleted', label: 'Deleted team variable' },
+  { id: 'variable.revealed', label: 'Revealed a secret' },
+  { id: 'variable.secret_used', label: 'Copied with secrets' },
+  { id: 'site.created', label: 'Created site' },
+  { id: 'site.updated', label: 'Updated site' },
+  { id: 'site.deleted', label: 'Deleted site' },
+  { id: 'site.members_updated', label: 'Changed site members' },
+  { id: 'runbook.created', label: 'Created runbook' },
+  { id: 'runbook.updated', label: 'Updated runbook' },
+  { id: 'runbook.deleted', label: 'Deleted runbook' },
+  { id: 'runbook.run_started', label: 'Started runbook' },
+  { id: 'runbook.run_completed', label: 'Finished runbook' },
+  { id: 'runbook.run_cancelled', label: 'Cancelled runbook' },
+  { id: 'runbook.step_ran', label: 'Ran runbook step' },
+  { id: 'snippet.queued_on_devices', label: 'Sent snippet to devices' },
+  { id: 'snippet.explained', label: 'Explained with AI' },
+  { id: 'snippet.converted', label: 'Converted with AI' },
+  { id: 'device.enrollment_created', label: 'Created device enrollment' },
+  { id: 'device.enrolled', label: 'Device enrolled' },
+  { id: 'device.revoked', label: 'Revoked device' },
+  { id: 'device.tool', label: 'Acted on device' },
+  { id: 'device.remote_updated', label: 'Changed remote access' },
+  { id: 'device.remote_password_revealed', label: 'Showed remote access password' },
+  { id: 'alert.acknowledge', label: 'Acknowledged alert' },
+  { id: 'alert.unacknowledge', label: 'Unacknowledged alert' },
+  { id: 'alert.snooze', label: 'Snoozed alert' },
+  { id: 'alert.unsnooze', label: 'Unsnoozed alert' },
+  { id: 'alert.resolve', label: 'Resolved alert' },
+  { id: 'policy.created', label: 'Created policy' },
+  { id: 'policy.updated', label: 'Updated policy' },
+  { id: 'policy.deleted', label: 'Deleted policy' },
+  { id: 'policy.patch_now', label: 'Started policy patching' },
+  { id: 'schedule.created', label: 'Created schedule' },
+  { id: 'schedule.updated', label: 'Updated schedule' },
+  { id: 'schedule.deleted', label: 'Deleted schedule' },
+  { id: 'schedule.ran', label: 'Ran schedule by hand' },
+  { id: 'notification.created', label: 'Added notification channel' },
+  { id: 'notification.updated', label: 'Updated notification channel' },
+  { id: 'notification.deleted', label: 'Deleted notification channel' },
+  { id: 'backup.created', label: 'Created backup' },
+  { id: 'backup.downloaded', label: 'Downloaded backup' },
+  { id: 'backup.deleted', label: 'Deleted backup' },
+  { id: 'backup.restored', label: 'Restored backup' },
+  { id: 'backup.schedule_updated', label: 'Changed automatic backups' }
 ];
 
 const ACTION_LABELS = Object.fromEntries(
@@ -67,7 +113,14 @@ export const auditGroup = (action: string): string => {
   if (action.startsWith('github.')) {
     return 'GitHub';
   }
-  if (action.startsWith('library.') || action.startsWith('collection.')) {
+  if (
+    action.startsWith('library.') ||
+    action.startsWith('collection.') ||
+    action.startsWith('variable.') ||
+    action.startsWith('site.') ||
+    action.startsWith('runbook.') ||
+    action.startsWith('schedule.')
+  ) {
     return 'Library';
   }
   if (action.startsWith('snippet.')) {
@@ -82,6 +135,12 @@ export const auditGroup = (action: string): string => {
   if (action.startsWith('raw_api_key.')) {
     return 'Keys';
   }
+  if (action.startsWith('device.')) {
+    return 'Devices';
+  }
+  if (action.startsWith('backup.') || action.startsWith('notification.')) {
+    return 'System';
+  }
 
   return 'System';
 };
@@ -90,7 +149,7 @@ export const auditTone = (action: string): 'ok' | 'warn' | 'bad' => {
   if (/\.failed$|_failed$|\.deleted$|\.revoked$/.test(action)) {
     return 'bad';
   }
-  if (/\.started$|\.disconnected$/.test(action)) {
+  if (/\.started$|\.disconnected$|\.revealed$|\.secret_used$|_cancelled$/.test(action)) {
     return 'warn';
   }
 

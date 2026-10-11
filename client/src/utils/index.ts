@@ -7,3 +7,8 @@ export * from './roles';
 export * from './auditLog';
 export * from './shareLinks';
 export * from './appInfo';
+export * from './templateVars';
+export * from './sha256';
+export * from './installCommands';
+export * from './resolveVariables';
+export * from './copyAsync';

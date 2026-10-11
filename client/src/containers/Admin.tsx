@@ -7,8 +7,12 @@ import {
   faDatabase,
   faRobot,
   faServer,
-  faUsers
+  faUsers,
+  faBell,
+  faHardDrive
 } from '@fortawesome/free-solid-svg-icons';
+import { AdminNotifications } from '../components/Admin/AdminNotifications';
+import { AdminSystem } from '../components/Admin/AdminSystem';
 import { Button, Card, Layout, PageHeader } from '../components/UI';
 import { AuthContext } from '../store';
 import { Response, Task } from '../typescript/interfaces';
@@ -186,8 +190,11 @@ interface ImportPreview {
 export const Admin = (): JSX.Element => {
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [activeTab, setActiveTab] = useState<
-    'github' | 'oidc' | 'ai' | 'library' | 'tasks' | 'audit' | 'users'
-  >('github');
+    'github' | 'oidc' | 'ai' | 'library' | 'tasks' | 'audit' | 'users' | 'notifications' | 'system'
+  >(() => {
+    const tab = new URLSearchParams(window.location.search).get('tab');
+    return tab === 'notifications' || tab === 'system' ? tab : 'github';
+  });
   const [message, setMessage] = useState('');
   const [oidcTest, setOidcTest] = useState<OidcTestResult | null>(null);
   const [oidcProvider, setOidcProvider] = useState(oidcProviders[0]);
@@ -749,7 +756,30 @@ export const Admin = (): JSX.Element => {
             <FontAwesomeIcon className='admin-fa-icon users' icon={faUsers} />
             Users
           </button>
+          <button
+            type='button'
+            role='tab'
+            className={activeTab === 'notifications' ? 'active' : ''}
+            aria-selected={activeTab === 'notifications'}
+            onClick={() => setActiveTab('notifications')}
+          >
+            <FontAwesomeIcon className='admin-fa-icon' icon={faBell} />
+            Notifications
+          </button>
+          <button
+            type='button'
+            role='tab'
+            className={activeTab === 'system' ? 'active' : ''}
+            aria-selected={activeTab === 'system'}
+            onClick={() => setActiveTab('system')}
+          >
+            <FontAwesomeIcon className='admin-fa-icon' icon={faHardDrive} />
+            Backups &amp; system
+          </button>
         </div>
+
+        {activeTab === 'notifications' && <AdminNotifications />}
+        {activeTab === 'system' && <AdminSystem />}
 
         {activeTab === 'github' && (
           <Card classes='task-panel admin-tab-panel'>

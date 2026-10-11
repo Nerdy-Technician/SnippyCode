@@ -1,14 +1,43 @@
-import { useState, createContext } from 'react';
+import { useState, useEffect, createContext } from 'react';
 import { useHistory } from 'react-router-dom';
 import axios from 'axios';
+import { copyAsync } from '../utils/copyAsync';
 import {
   Context,
   Snippet,
   Response,
   TagCount,
   NewSnippet,
-  SearchQuery
+  SearchQuery,
+  RenderResult,
+  Site,
+  VariableList
 } from '../typescript/interfaces';
+
+const emptyVariables: VariableList = { team: [], personal: [], site: [], canEditTeam: false };
+const SITE_STORAGE_KEY = 'snippycode:selectedSite';
+
+// The chosen site is a per-browser convenience; storage may be unavailable
+const readStoredSite = (): number | null => {
+  try {
+    return Number(window.localStorage.getItem(SITE_STORAGE_KEY)) || null;
+  } catch {
+    return null;
+  }
+};
+
+const writeStoredSite = (id: number | null): void => {
+  try {
+    if (id) {
+      window.localStorage.setItem(SITE_STORAGE_KEY, String(id));
+    } else {
+      window.localStorage.removeItem(SITE_STORAGE_KEY);
+    }
+  } catch {
+    // ignore
+  }
+};
+
 
 export const SnippetsContext = createContext<Context>({
   snippets: [],
@@ -28,7 +57,18 @@ export const SnippetsContext = createContext<Context>({
   toggleSnippetPin: (id: number, isPinned?: boolean) => {},
   countTags: () => {},
   searchSnippets: (query: SearchQuery) => {},
-  clearSearch: () => {}
+  clearSearch: () => {},
+  variables: emptyVariables,
+  getVariables: () => {},
+  sites: [],
+  canManageSites: false,
+  getSites: () => {},
+  selectedSiteId: null,
+  setSelectedSiteId: (id: number | null) => {},
+  toggleFavorite: (id: number) => {},
+  trackActivity: async (id: number, type: 'view' | 'copy') => {},
+  renderSnippet: async () => ({ code: '', sha256: '', secretsUsed: [], missing: [] }),
+  copySnippetCode: async () => {}
 });
 
 interface Props {
@@ -41,6 +81,15 @@ export const SnippetsContextProvider = (props: Props): JSX.Element => {
   const [searchActive, setSearchActive] = useState(false);
   const [currentSnippet, setCurrentSnippet] = useState<Snippet | null>(null);
   const [tagCount, setTagCount] = useState<TagCount[]>([]);
+  const [variables, setVariables] = useState<VariableList>(emptyVariables);
+  const [sites, setSites] = useState<Site[]>([]);
+  const [canManageSites, setCanManageSites] = useState(false);
+  const [selectedSiteId, setSelectedSiteIdState] = useState<number | null>(readStoredSite());
+
+  const setSelectedSiteId = (id: number | null): void => {
+    setSelectedSiteIdState(id);
+    writeStoredSite(id);
+  };
 
   const history = useHistory();
 
@@ -251,6 +300,124 @@ export const SnippetsContextProvider = (props: Props): JSX.Element => {
       });
   };
 
+  const getSites = (): void => {
+    axios
+      .get<Response<{ sites: Site[]; canManage: boolean }>>('/api/sites')
+      .then(res => {
+        setSites(res.data.data.sites);
+        setCanManageSites(res.data.data.canManage);
+
+        // Forget a remembered site the user can no longer use
+        if (selectedSiteId && !res.data.data.sites.some(site => site.id === selectedSiteId)) {
+          setSelectedSiteId(null);
+        }
+      })
+      .catch(() => setSites([]));
+  };
+
+  const getVariables = (): void => {
+    axios
+      .get<Response<VariableList>>('/api/variables')
+      .then(res => setVariables(res.data.data))
+      .catch(() => setVariables(emptyVariables));
+  };
+
+  // Apply a change to a snippet wherever it is held locally
+  const patchLocalSnippet = (id: number, patch: (snippet: Snippet) => Snippet) => {
+    const apply = (items: Snippet[]) =>
+      items.map(item => (item.id === id ? patch(item) : item));
+
+    setSnippets(apply);
+    setSearchResults(apply);
+    setCurrentSnippet(current =>
+      current && current.id === id ? patch(current) : current
+    );
+  };
+
+  const personalOf = (snippet: Snippet) =>
+    snippet.personal || {
+      isFavorite: false,
+      views: 0,
+      copies: 0,
+      lastViewedAt: null,
+      lastCopiedAt: null
+    };
+
+  const toggleFavorite = (id: number): void => {
+    const snippet =
+      snippets.find(item => item.id === id) ||
+      (currentSnippet?.id === id ? currentSnippet : null);
+    const favorite = !(snippet?.personal?.isFavorite || false);
+
+    patchLocalSnippet(id, item => ({
+      ...item,
+      personal: { ...personalOf(item), isFavorite: favorite }
+    }));
+
+    axios.put(`/api/snippets/${id}/favorite`, { favorite }).catch(() =>
+      patchLocalSnippet(id, item => ({
+        ...item,
+        personal: { ...personalOf(item), isFavorite: !favorite }
+      }))
+    );
+  };
+
+  const trackActivity = (id: number, type: 'view' | 'copy'): Promise<void> => {
+    const now = new Date().toISOString();
+
+    patchLocalSnippet(id, item => {
+      const personal = personalOf(item);
+
+      return {
+        ...item,
+        personal:
+          type === 'view'
+            ? { ...personal, views: personal.views + 1, lastViewedAt: now }
+            : { ...personal, copies: personal.copies + 1, lastCopiedAt: now }
+      };
+    });
+
+    return axios
+      .post(`/api/snippets/${id}/activity`, { type })
+      .then(() => undefined)
+      .catch(() => undefined);
+  };
+
+  // Filled in on the server so secret values never sit in the page
+  const renderSnippet = async (
+    id: number,
+    options: { siteId?: number | null; variables?: Record<string, string>; purpose?: 'copy' } = {}
+  ): Promise<RenderResult> => {
+    const res = await axios.post<Response<RenderResult>>(`/api/snippets/${id}/render`, {
+      siteId: options.siteId || undefined,
+      variables: options.variables || {},
+      purpose: options.purpose
+    });
+
+    return res.data.data;
+  };
+
+  const copySnippetCode = async (
+    snippet: Snippet,
+    options: { siteId?: number | null; variables?: Record<string, string> } = {}
+  ): Promise<void> => {
+    const rendered = renderSnippet(snippet.id, { ...options, purpose: 'copy' });
+    await copyAsync(rendered.then(result => result.code));
+
+    // The server counted the copy; mirror it locally for Home
+    const now = new Date().toISOString();
+    patchLocalSnippet(snippet.id, item => {
+      const personal = personalOf(item);
+      return { ...item, personal: { ...personal, copies: personal.copies + 1, lastCopiedAt: now } };
+    });
+  };
+
+  // The provider only mounts behind AuthGate, so the session is ready here
+  useEffect(() => {
+    getVariables();
+    getSites();
+  }, []);
+
   const context = {
     snippets,
     searchResults,
@@ -269,7 +436,18 @@ export const SnippetsContextProvider = (props: Props): JSX.Element => {
     toggleSnippetPin,
     countTags,
     searchSnippets,
-    clearSearch
+    clearSearch,
+    variables,
+    getVariables,
+    sites,
+    canManageSites,
+    getSites,
+    selectedSiteId,
+    setSelectedSiteId,
+    toggleFavorite,
+    trackActivity,
+    renderSnippet,
+    copySnippetCode
   };
 
   return (
