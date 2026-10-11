@@ -4,3 +4,4 @@ export * from './errorHandler';
 export * from './securityHeaders';
 export * from './validateSnippet';
 export * from './requireAuth';
+export * from './requestGuards';

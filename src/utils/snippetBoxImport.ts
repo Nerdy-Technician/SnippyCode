@@ -140,7 +140,11 @@ export const fetchSnippetBoxSnippets = async (options: {
   apiKey?: string;
   collection?: string;
 }): Promise<SnippetBoxSnippet[]> => {
-  const rawUrl = String(options.url || '').trim().replace(/\/+$/, '');
+  let rawUrl = String(options.url || '').trim();
+
+  while (rawUrl.endsWith('/')) {
+    rawUrl = rawUrl.slice(0, -1);
+  }
 
   if (!rawUrl) {
     throw new Error('Snippet Box URL is required');

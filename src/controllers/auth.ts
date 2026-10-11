@@ -60,7 +60,7 @@ const readOidcState = (
 ): { state: string; nonce: string } | null => {
   const queryState = String(req.query.state || '').trim();
 
-  if (queryState) {
+  {
     try {
       const payload = jwt.verify(queryState, getSessionSecret()) as {
         purpose?: string;
@@ -246,21 +246,26 @@ export const login = asyncWrapper(
       let validChallenge = false;
 
       try {
-        const challenge = mfaToken
-          ? (jwt.verify(mfaToken, getSessionSecret()) as {
-              userId?: number;
-              type?: string;
-            })
-          : null;
+        // An empty or missing token fails verification and lands in catch
+        const challenge = jwt.verify(String(mfaToken || ''), getSessionSecret()) as {
+          userId?: number;
+          type?: string;
+        };
         validChallenge = challenge?.userId === user.id && challenge.type === 'mfa';
       } catch (err) {
         validChallenge = false;
       }
 
-      const validCode =
-        user.mfaSecret &&
-        mfaCode &&
-        authenticator.verify({ token: String(mfaCode), secret: user.mfaSecret });
+      let validCode = false;
+
+      try {
+        validCode = authenticator.verify({
+          token: String(mfaCode || ''),
+          secret: String(user.mfaSecret || '')
+        });
+      } catch (err) {
+        validCode = false;
+      }
 
       if (!validChallenge || !validCode) {
         res.status(200).json({

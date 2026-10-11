@@ -14,11 +14,7 @@ export interface AuthStatus {
   localLoginEnabled: boolean;
   oidcProviderName?: string;
   user: AuthUser | null;
-  snippetRun?: {
-    enabled: boolean;
-    languages: string[];
-    timeoutMs: number;
-  };
+  snippetRun?: RunnerSettings;
   snippetAssist?: {
     enabled: boolean;
     providers: { id: 'openai' | 'anthropic'; label: string }[];
@@ -46,4 +42,15 @@ export interface SetupPayload {
     provider?: string;
     providerName?: string;
   };
+}
+
+export interface RunnerSettings {
+  enabled: boolean;
+  languages: string[];
+  timeoutMs: number;
+  /** How server runs are isolated */
+  sandbox?: 'bwrap' | 'docker' | 'none';
+  sandboxReason?: string;
+  memoryMb?: number;
+  network?: boolean;
 }

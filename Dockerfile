@@ -1,16 +1,16 @@
-FROM node:25-alpine AS server-deps
+FROM node:25-alpine@sha256:bdf2cca6fe3dabd014ea60163eca3f0f7015fbd5c7ee1b0e9ccb4ced6eb02ef4 AS server-deps
 
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 
-FROM node:25-alpine AS client-deps
+FROM node:25-alpine@sha256:bdf2cca6fe3dabd014ea60163eca3f0f7015fbd5c7ee1b0e9ccb4ced6eb02ef4 AS client-deps
 
 WORKDIR /app/client
 COPY client/package*.json ./
 RUN npm ci --legacy-peer-deps
 
-FROM node:25-alpine AS build
+FROM node:25-alpine@sha256:bdf2cca6fe3dabd014ea60163eca3f0f7015fbd5c7ee1b0e9ccb4ced6eb02ef4 AS build
 
 WORKDIR /app
 ENV NODE_OPTIONS=--openssl-legacy-provider
@@ -22,17 +22,21 @@ RUN npm run build:tsc \
   && mkdir -p public data \
   && cp -R client/build/. public/
 
-FROM node:25-alpine AS runtime
+FROM node:25-alpine@sha256:bdf2cca6fe3dabd014ea60163eca3f0f7015fbd5c7ee1b0e9ccb4ced6eb02ef4 AS runtime
 
 WORKDIR /app
 ENV NODE_ENV=production
+
+# Interpreters for server runs, bubblewrap to sandbox them, and linters
+RUN apk add --no-cache bash python3 bubblewrap shellcheck ruff
 
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/build ./build
 COPY --from=build /app/public ./public
-RUN mkdir -p data
+COPY agent ./agent
+RUN mkdir -p data/backups
 
 EXPOSE 5000
 

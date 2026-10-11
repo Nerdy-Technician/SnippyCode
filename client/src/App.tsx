@@ -9,8 +9,17 @@ import {
   Editor,
   Home,
   PublicSnippet,
+  RunbookRun,
+  Runbooks,
+  Schedules,
+  Devices,
+  DeviceDetail,
+  Alerts,
+  Policies,
+  Sites,
   Snippet,
-  Snippets
+  Snippets,
+  Variables
 } from './containers';
 import {
   AuthContext,
@@ -51,6 +60,15 @@ const PrivateApp = (): JSX.Element => (
         <Route path='/snippets' component={Snippets} />
         <Route path='/snippet/:id' component={Snippet} />
         <Route path='/editor/:id?' component={EditorRoute} />
+        <Route path='/variables' component={Variables} />
+        <Route path='/sites/:id?' component={Sites} />
+        <Route path='/runbooks/runs/:runId' component={RunbookRun} />
+        <Route path='/runbooks/:id?' component={Runbooks} />
+        <Route path='/schedules/:id?' component={Schedules} />
+        <Route exact path='/devices' component={Devices} />
+        <Route path='/devices/:id' component={DeviceDetail} />
+        <Route path='/alerts' component={Alerts} />
+        <Route path='/policies/:id?' component={Policies} />
         <Route path='/admin' component={AdminRoute} />
       </Switch>
     </SnippetsContextProvider>

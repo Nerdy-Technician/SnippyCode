@@ -606,3 +606,154 @@ export const testAiProvider = async (
 
   return { ok: true, model };
 };
+
+// Explain, convert, and meaning search -------------------------------------
+
+const askJson = async (
+  providerRequest: string | undefined,
+  prompt: string
+): Promise<{ provider: AiProviderId; json: any }> => {
+  const settings = await getAiSettings();
+  const provider = resolveAssistProvider(settings, providerRequest);
+  const config = pickText(settings, provider);
+  const raw =
+    provider === 'openai'
+      ? await callOpenAi(config.model, prompt)
+      : await callAnthropic(config.model, prompt);
+
+  return { provider, json: JSON.parse(extractJsonObject(raw)) };
+};
+
+const strings = (value: unknown, limit = 12): string[] =>
+  (Array.isArray(value) ? value : [])
+    .map(item => String(item || '').trim())
+    .filter(Boolean)
+    .slice(0, limit);
+
+export interface SnippetExplanation {
+  summary: string;
+  steps: string[];
+  requirements: string[];
+  risks: string[];
+}
+
+/**
+ * Plain-English walkthrough of what a snippet does and what to watch for.
+ */
+export const explainSnippet = async (options: {
+  provider?: string;
+  snippet: AssistSnippetInput;
+}): Promise<{ provider: AiProviderId; result: SnippetExplanation }> => {
+  const { provider, json } = await askJson(
+    options.provider,
+    [
+      'You explain snippets from a private operations library to the engineer about to run them.',
+      'Return a single JSON object and nothing else, with these keys:',
+      'summary: two or three plain sentences on what the snippet does.',
+      'steps: array of short strings, one per meaningful action, in order.',
+      'requirements: array of what must be true to run it (tools, OS, permissions, network).',
+      'risks: array of anything destructive, irreversible, or security-sensitive. Empty if none.',
+      '{{NAME}} and {{NAME:default}} are placeholders filled in before running.',
+      `Snippet JSON: ${JSON.stringify(snippetSnapshot(options.snippet))}`
+    ].join('\n')
+  );
+
+  return {
+    provider,
+    result: {
+      summary: String(json.summary || '').trim() || 'No explanation returned.',
+      steps: strings(json.steps, 20),
+      requirements: strings(json.requirements),
+      risks: strings(json.risks)
+    }
+  };
+};
+
+/**
+ * Rewrite a snippet in another language, e.g. bash to PowerShell.
+ */
+export const convertSnippet = async (options: {
+  provider?: string;
+  snippet: AssistSnippetInput;
+  targetLanguage: string;
+}): Promise<{ provider: AiProviderId; result: { language: string; code: string; notes: string[] } }> => {
+  const target = String(options.targetLanguage || '').trim().toLowerCase();
+
+  if (!target) {
+    throw new Error('Choose a language to convert to');
+  }
+
+  const { provider, json } = await askJson(
+    options.provider,
+    [
+      `Convert this snippet to ${target}. Keep the same behaviour, idiomatic for ${target}.`,
+      'Keep {{NAME}} and {{NAME:default}} placeholders exactly as written, in the same places.',
+      'Return a single JSON object and nothing else, with keys:',
+      'code: the complete converted snippet.',
+      'notes: array of short strings on anything that behaves differently or needs checking. Empty if none.',
+      `Snippet JSON: ${JSON.stringify(snippetSnapshot(options.snippet))}`
+    ].join('\n')
+  );
+  const code = typeof json.code === 'string' ? json.code : '';
+
+  if (!code.trim()) {
+    throw new Error('The assistant did not return converted code');
+  }
+
+  return { provider, result: { language: target, code, notes: strings(json.notes) } };
+};
+
+export interface LibraryEntry {
+  id: number;
+  title: string;
+  description?: string;
+  language?: string;
+  collection?: string;
+  tags?: string[];
+  code?: string;
+}
+
+/**
+ * Rank library snippets by how well they answer a question, using a compact
+ * index (titles, descriptions, tags, and the start of the code).
+ */
+export const searchByMeaning = async (options: {
+  provider?: string;
+  query: string;
+  entries: LibraryEntry[];
+}): Promise<{ provider: AiProviderId; results: { id: number; reason: string }[] }> => {
+  const query = String(options.query || '').trim();
+
+  if (!query) {
+    throw new Error('Type what you are looking for');
+  }
+
+  const index = options.entries.slice(0, 400).map(entry => ({
+    id: entry.id,
+    t: entry.title,
+    d: (entry.description || '').slice(0, 160),
+    l: entry.language,
+    c: entry.collection,
+    g: (entry.tags || []).slice(0, 8),
+    x: (entry.code || '').slice(0, 240)
+  }));
+
+  const { provider, json } = await askJson(
+    options.provider,
+    [
+      'You search a private snippet library by meaning, not keywords.',
+      'Pick up to 8 snippets that best answer the request, best first. Only use ids from the index.',
+      'Return a single JSON object and nothing else: {"results":[{"id":123,"reason":"one short sentence"}]}.',
+      'Return {"results":[]} if nothing fits.',
+      `Request: ${query}`,
+      `Index (t title, d description, l language, c collection, g tags, x code start): ${JSON.stringify(index)}`
+    ].join('\n')
+  );
+  const known = new Set(options.entries.map(entry => entry.id));
+  const results = (Array.isArray(json.results) ? json.results : [])
+    .map((item: any) => ({ id: Number(item.id), reason: String(item.reason || '').trim() }))
+    .filter((item: { id: number }) => known.has(item.id))
+    .slice(0, 8);
+
+  return { provider, results };
+};

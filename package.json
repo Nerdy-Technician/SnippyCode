@@ -1,6 +1,6 @@
 {
   "name": "snippycode",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Private self-hosted snippet manager with auth, raw links, GitHub sync, and PostgreSQL.",
   "main": "build/server.js",
   "scripts": {
@@ -22,13 +22,15 @@
     "typecheck:server": "tsc --noEmit -p tsconfig.test.json",
     "typecheck:client": "tsc --noEmit -p client/tsconfig.json",
     "test": "npm-run-all -n test:server test:client",
-    "test:server": "rm -rf .test-build && tsc -p tsconfig.test.json && node --test '.test-build/test/**/*.test.js'",
+    "test:server": "rm -rf .test-build && tsc -p tsconfig.test.json && node --test --test-concurrency=1 '.test-build/test/**/*.test.js'",
     "test:client": "npm test --prefix=client -- --watchAll=false",
     "docker:build": "docker build -t snippycode .",
-    "docker:up": "docker compose up -d --build"
+    "docker:up": "docker compose up -d --build",
+    "backup": "node build/backupCli.js"
   },
   "bin": {
-    "snippycode": "build/cli.js"
+    "snippycode": "build/cli.js",
+    "snippycode-backup": "build/backupCli.js"
   },
   "keywords": [
     "snippets",
@@ -61,6 +63,7 @@
     "cookie-parser": "^1.4.7",
     "dotenv": "^18.0.6",
     "express": "^4.22.3",
+    "express-rate-limit": "^8.7.1",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.4.0",
     "openid-client": "^5.7.1",
@@ -70,5 +73,8 @@
     "qrcode": "^1.5.4",
     "sequelize": "^6.37.8",
     "umzug": "^2.3.0"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }

@@ -7,3 +7,7 @@ export * from './Statistics';
 export * from './SearchQuery';
 export * from './Auth';
 export * from './Task';
+export * from './Variable';
+export * from './Site';
+export * from './Runbook';
+export * from './Automation';

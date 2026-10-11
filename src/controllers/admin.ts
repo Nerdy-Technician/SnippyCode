@@ -463,7 +463,7 @@ export const getAdminOverview = asyncWrapper(
 
 export const generateRawApiKey = asyncWrapper(
   async (req: Request, res: Response): Promise<void> => {
-    const { key, settings } = createRawApiKey();
+    const { key, settings } = await createRawApiKey();
 
     await setSetting('rawApiKey', settings);
     await auditLog('raw_api_key.generated', {

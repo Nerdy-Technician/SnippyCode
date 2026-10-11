@@ -32,8 +32,11 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      # Throwaway database for the HTTP share tests (test/shareRoutes.test.ts).
+      # Throwaway database for the HTTP and feature tests.
       TEST_DATABASE_URL: postgres://snippycode:snippycode@localhost:5432/snippycode_test
+      # Some test files import the models before pointing them at the test DB
+      DATABASE_URL: postgres://snippycode:snippycode@localhost:5432/snippycode_test
+      CI: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -44,6 +47,10 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             client/package-lock.json
+
+      # bubblewrap for sandboxed runs; shellcheck for the lint and agent checks
+      - name: Install system tools
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap shellcheck
 
       - name: Install server dependencies
         run: npm ci
@@ -59,6 +66,12 @@ jobs:
 
       - name: Test
         run: npm test
+
+      - name: Check agent scripts
+        run: |
+          bash -n agent/install.sh
+          bash -n agent/snippycode-agent.sh
+          shellcheck -S warning agent/install.sh agent/snippycode-agent.sh
 
       - name: Build (tsc + client)
         run: npm run build

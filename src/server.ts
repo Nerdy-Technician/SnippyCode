@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-import { Logger } from './utils';
+import { Logger, monitoringTick, onSchedulerTick, runAutomaticBackup, startScheduler } from './utils';
 import { connectDB } from './db';
 import { associateModels } from './db/associateModels';
 import { createApp } from './app';
@@ -14,6 +14,11 @@ const app = createApp();
 (async () => {
   await connectDB();
   await associateModels();
+  onSchedulerTick(async now => {
+    await runAutomaticBackup(now);
+  });
+  onSchedulerTick(monitoringTick);
+  startScheduler();
 
   app.listen(PORT, () => {
     logger.log(
