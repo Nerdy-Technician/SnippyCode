@@ -1,4 +1,5 @@
 import { Model, DataTypes, Optional } from 'sequelize';
+import { encryptScheduleVariables, needsRebinding } from '../utils/scheduleVariables';
 import { sequelize } from '../db';
 
 const { INTEGER, STRING, DATE, TEXT, BOOLEAN } = DataTypes;
@@ -18,6 +19,11 @@ export interface Device extends Stamps {
   os: string;
   arch: string;
   agentVersion: string;
+  updateRing: string;
+  updatePin: string;
+  previousAgentVersion: string;
+  lastUpdateResult: string;
+  healthyCheckins: number;
   capabilities: string;
   tokenHash: string;
   tokenPrefix: string;
@@ -34,6 +40,23 @@ export interface Device extends Stamps {
   fields: string;
   /** JSON: remote access details; the password is stored encrypted */
   remote: string;
+  machineId: string | null;
+  /** Random UUID the agent generates on first run; the stable identity */
+  agentId: string | null;
+  /** Hint only: another device shares this one's hostname/OS/arch or machine ID */
+  possibleDuplicate: boolean;
+  /** Comma-separated IDs of the look-alike devices */
+  duplicateOf: string;
+  /** sha256 hardware fingerprint from the agent (never the raw values) */
+  fingerprint: string | null;
+  /** For clones: the device this one was cloned from */
+  clonedFrom: number | null;
+  /** Clone self-enrolled and waiting for an admin: gets no jobs, scripts or secrets */
+  clonePendingApproval: boolean;
+  /** First fingerprint was bound from an unexpected address after migration 25 */
+  fingerprintPendingReview: boolean;
+  /** Comma-separated, lower-case */
+  tags: string;
 }
 
 export interface DeviceInstance
@@ -48,11 +71,25 @@ export interface DeviceInstance
         | 'os'
         | 'arch'
         | 'agentVersion'
+        | 'updateRing'
+        | 'updatePin'
+        | 'previousAgentVersion'
+        | 'lastUpdateResult'
+        | 'healthyCheckins'
         | 'capabilities'
         | 'lastSeenAt'
         | 'lastIp'
         | 'offlineNotifiedAt'
         | 'revokedAt'
+        | 'machineId'
+        | 'agentId'
+        | 'possibleDuplicate'
+        | 'duplicateOf'
+        | 'fingerprint'
+        | 'clonedFrom'
+        | 'clonePendingApproval'
+        | 'fingerprintPendingReview'
+        | 'tags'
         | 'facts'
         | 'factsAt'
         | 'inventory'
@@ -72,6 +109,11 @@ export const DeviceModel = sequelize.define<DeviceInstance>(
     os: { type: STRING(40), allowNull: false, defaultValue: '' },
     arch: { type: STRING(40), allowNull: false, defaultValue: '' },
     agentVersion: { type: STRING(40), allowNull: false, defaultValue: '' },
+    updateRing: { type: STRING(20), allowNull: false, defaultValue: 'stable' },
+    updatePin: { type: STRING(40), allowNull: false, defaultValue: '' },
+    previousAgentVersion: { type: STRING(40), allowNull: false, defaultValue: '' },
+    lastUpdateResult: { type: STRING(300), allowNull: false, defaultValue: '' },
+    healthyCheckins: { type: INTEGER, allowNull: false, defaultValue: 0 },
     capabilities: { type: TEXT, allowNull: false, defaultValue: '' },
     tokenHash: { type: STRING, allowNull: false },
     tokenPrefix: { type: STRING(20), allowNull: false },
@@ -84,6 +126,15 @@ export const DeviceModel = sequelize.define<DeviceInstance>(
     inventory: { type: TEXT, allowNull: false, defaultValue: '{}' },
     fields: { type: TEXT, allowNull: false, defaultValue: '{}' },
     remote: { type: TEXT, allowNull: false, defaultValue: '{}' },
+    machineId: { type: STRING(128), allowNull: true },
+    agentId: { type: STRING(36), allowNull: true },
+    possibleDuplicate: { type: BOOLEAN, allowNull: false, defaultValue: false },
+    duplicateOf: { type: TEXT, allowNull: false, defaultValue: '' },
+    fingerprint: { type: STRING(64), allowNull: true },
+    clonedFrom: { type: INTEGER, allowNull: true },
+    clonePendingApproval: { type: BOOLEAN, allowNull: false, defaultValue: false },
+    fingerprintPendingReview: { type: BOOLEAN, allowNull: false, defaultValue: false },
+    tags: { type: TEXT, allowNull: false, defaultValue: '' },
     ...stamps
   },
   { tableName: 'devices' }
@@ -95,13 +146,20 @@ export interface DeviceEnrollment extends Stamps {
   tokenHash: string;
   tokenPrefix: string;
   expiresAt: Date;
-  maxUses: number;
+  /** null = unlimited until expiry or revoke */
+  maxUses: number | null;
   uses: number;
   createdBy: number | null;
+  label: string;
+  lastUsedAt: Date | null;
+  revokedAt: Date | null;
+  revokedBy: number | null;
+  /** Admin-only: may rotate the token of a machine that is already enrolled */
+  allowReenrol: boolean;
 }
 
 export interface DeviceEnrollmentInstance
-  extends Model<DeviceEnrollment, Optional<DeviceEnrollment, 'id' | 'createdAt' | 'updatedAt' | 'uses'>>,
+  extends Model<DeviceEnrollment, Optional<DeviceEnrollment, 'id' | 'createdAt' | 'updatedAt' | 'uses' | 'label' | 'lastUsedAt' | 'revokedAt' | 'revokedBy' | 'allowReenrol'>>,
     DeviceEnrollment {}
 
 export const DeviceEnrollmentModel = sequelize.define<DeviceEnrollmentInstance>(
@@ -112,9 +170,14 @@ export const DeviceEnrollmentModel = sequelize.define<DeviceEnrollmentInstance>(
     tokenHash: { type: STRING, allowNull: false },
     tokenPrefix: { type: STRING(20), allowNull: false },
     expiresAt: { type: DATE, allowNull: false },
-    maxUses: { type: INTEGER, allowNull: false, defaultValue: 1 },
+    maxUses: { type: INTEGER, allowNull: true, defaultValue: 1 },
     uses: { type: INTEGER, allowNull: false, defaultValue: 0 },
     createdBy: { type: INTEGER, allowNull: true },
+    label: { type: STRING(120), allowNull: false, defaultValue: '' },
+    lastUsedAt: { type: DATE, allowNull: true },
+    revokedAt: { type: DATE, allowNull: true },
+    revokedBy: { type: INTEGER, allowNull: true },
+    allowReenrol: { type: BOOLEAN, allowNull: false, defaultValue: false },
     ...stamps
   },
   { tableName: 'device_enrollments' }
@@ -197,7 +260,7 @@ export const AgentJobModel = sequelize.define<AgentJobInstance>(
 
 // Schedules ----------------------------------------------------------------
 
-export type ScheduleSiteMode = 'none' | 'sites' | 'tag' | 'all' | 'policy';
+export type ScheduleSiteMode = 'none' | 'sites' | 'tag' | 'all' | 'policy' | 'devices';
 
 export interface Schedule extends Stamps {
   id: number;
@@ -210,10 +273,17 @@ export interface Schedule extends Stamps {
   siteMode: ScheduleSiteMode;
   siteIds: string;
   siteTag: string;
+  /** Devices picked one by one (comma-separated ids) */
+  deviceIds: string;
+  /** Only devices with this tag (lower-case), or empty */
+  deviceTag: string;
+  variables: Record<string, string>;
+  deviceTagIds: string;
   runOn: 'server' | 'devices';
   notifyOn: 'failure' | 'always' | 'never';
   enabled: boolean;
   createdBy: number | null;
+  updatedBy: number | null;
   lastRunAt: Date | null;
   lastStatus: string | null;
   nextRunAt: Date | null;
@@ -225,7 +295,7 @@ export interface ScheduleInstance
       Schedule,
       Optional<
         Schedule,
-        'id' | 'createdAt' | 'updatedAt' | 'lastRunAt' | 'lastStatus' | 'nextRunAt' | 'createdBy' | 'policyId'
+        'id' | 'createdAt' | 'updatedAt' | 'lastRunAt' | 'lastStatus' | 'nextRunAt' | 'createdBy' | 'updatedBy' | 'policyId' | 'deviceIds' | 'deviceTag' | 'variables' | 'deviceTagIds'
       >
     >,
     Schedule {}
@@ -243,20 +313,66 @@ export const ScheduleModel = sequelize.define<ScheduleInstance>(
     siteMode: { type: STRING(10), allowNull: false, defaultValue: 'none' },
     siteIds: { type: TEXT, allowNull: false, defaultValue: '' },
     siteTag: { type: STRING(60), allowNull: false, defaultValue: '' },
+    deviceIds: { type: TEXT, allowNull: false, defaultValue: '' },
+    deviceTag: { type: STRING(60), allowNull: false, defaultValue: '' },
+    deviceTagIds: { type: TEXT, allowNull: false, defaultValue: '' },
+    variables: {
+      type: TEXT,
+      allowNull: false,
+      defaultValue: '{}',
+      get(this: any) {
+        try {
+          return JSON.parse(this.getDataValue('variables') || '{}');
+        } catch {
+          return {};
+        }
+      },
+      set(this: any, value: unknown) {
+        // Stored as given here; the beforeSave hook encrypts and binds every
+        // value to this schedule before anything reaches the database
+        let parsed: unknown = value;
+        if (typeof value === 'string') {
+          try {
+            parsed = JSON.parse(value || '{}');
+          } catch {
+            parsed = {};
+          }
+        }
+        this.setDataValue('variables', JSON.stringify(parsed && typeof parsed === 'object' ? parsed : {}));
+      }
+    },
     runOn: { type: STRING(10), allowNull: false, defaultValue: 'server' },
     notifyOn: { type: STRING(10), allowNull: false, defaultValue: 'failure' },
     enabled: { type: BOOLEAN, allowNull: false, defaultValue: true },
     createdBy: { type: INTEGER, allowNull: true },
+    updatedBy: { type: INTEGER, allowNull: true },
     lastRunAt: { type: DATE, allowNull: true },
     lastStatus: { type: STRING(20), allowNull: true },
     nextRunAt: { type: DATE, allowNull: true },
     policyId: { type: INTEGER, allowNull: true },
     ...stamps
   },
-  { tableName: 'schedules' }
+  {
+    tableName: 'schedules',
+    hooks: {
+      // Encrypt (AES-GCM, AAD = schedules:<id>:variables:<name>) on every
+      // save. New rows take their id from the sequence first so the AAD can
+      // name it.
+      beforeSave: async (schedule: any, options: any) => {
+        if (!needsRebinding(schedule.variables)) return;
+        if (!schedule.id) {
+          const [rows] = (await sequelize.query(`SELECT nextval(pg_get_serial_sequence('schedules', 'id')) AS id`, {
+            transaction: options?.transaction
+          })) as [Array<{ id: string }>, unknown];
+          schedule.setDataValue('id', Number(rows[0].id));
+        }
+        schedule.setDataValue('variables', JSON.stringify(encryptScheduleVariables(schedule.variables, schedule.id)));
+      }
+    }
+  }
 );
 
-export type ScheduleRunStatus = 'running' | 'succeeded' | 'failed' | 'attention';
+export type ScheduleRunStatus = 'running' | 'succeeded' | 'failed' | 'attention' | 'awaiting_approval' | 'missed';
 
 export interface ScheduleRun extends Stamps {
   id: number;

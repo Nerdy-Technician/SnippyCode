@@ -7,6 +7,8 @@ import {
   useEffect,
   useRef
 } from 'react';
+import { SnippetVariablesEditor } from './SnippetVariablesEditor';
+import { definitionProblems } from '../../utils/snippetVariables';
 import Editor from '@monaco-editor/react';
 import type { OnMount } from '@monaco-editor/react';
 import copy from 'clipboard-copy';
@@ -209,7 +211,8 @@ export const SnippetForm = (props: Props): JSX.Element => {
     tags: [],
     collection: 'General',
     fileName: '',
-    isPublic: false
+    isPublic: false,
+    variables: []
   });
 
   useEffect(() => {
@@ -538,8 +541,18 @@ export const SnippetForm = (props: Props): JSX.Element => {
     e.preventDefault();
     const payload = {
       ...formData,
-      language: formData.language || 'plaintext'
+      language: formData.language || 'plaintext',
+      variables: (formData.variables || []).map(def => ({
+        ...def,
+        choices: def.choices?.filter(Boolean)
+      }))
     };
+
+    const variableProblems = definitionProblems(payload.variables);
+    if (variableProblems.length) {
+      window.alert(`Fix the variables first: ${variableProblems.join('; ')}`);
+      return;
+    }
 
     if (
       secretWarnings.length > 0 &&
@@ -935,6 +948,15 @@ export const SnippetForm = (props: Props): JSX.Element => {
                   Possible secrets detected: {secretWarnings.join(', ')}
                 </div>
               )}
+
+              <SnippetVariablesEditor
+                code={formData.code}
+                value={formData.variables || []}
+                snippetId={inEdit ? currentSnippet?.id : undefined}
+                onChange={variables => setFormData(current => ({ ...current, variables }))}
+              />
+
+              <hr />
 
               <h5 className='card-title mb-3'>Documentation</h5>
               <div className='docs-tabs' role='tablist'>

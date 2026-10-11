@@ -1,3 +1,4 @@
+import type { VariableDefinition } from '../../utils/snippetVariables';
 import { Model } from '.';
 
 export interface NewSnippet {
@@ -11,6 +12,8 @@ export interface NewSnippet {
   collection?: string;
   fileName?: string;
   isPublic?: boolean;
+  variables?: VariableDefinition[];
+  dangerous?: boolean;
 }
 
 export interface SnippetUsage {

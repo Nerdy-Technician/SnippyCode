@@ -11,8 +11,11 @@ import {
   RunbookRunSummary,
   RunbookStep
 } from '../typescript/interfaces';
-import { canEditSnippets, dateParser } from '../utils';
+import { approvalMessage, canEditSnippets, dateParser, heldApproval } from '../utils';
+import { DangerousToggle } from '../components/Approvals/DangerousToggle';
 import { apiError } from '../components/Variables/VariableFields';
+import { ImportExampleRunbook } from '../components/Runbooks/ImportExampleRunbook';
+import { StepValuesEditor } from '../components/Runbooks/StepValuesEditor';
 
 export const statusLabel: { [status: string]: string } = {
   in_progress: 'In progress',
@@ -107,11 +110,24 @@ const RunbookList = (): JSX.Element => {
             Chain snippets and manual steps in order, then work through them for one customer or
             site. Each step fills in that site's values, and server runs are kept in its history.
           </p>
+          <p className='mb-0'>
+            <Link to='/help/runbooks'>Read the runbook guide</Link>
+          </p>
         </section>
       </div>
 
       <div className='col-12 col-lg-7 d-grid gap-4 align-content-start'>
         {error && <div className='alert alert-danger mb-0'>{error}</div>}
+        {canEdit && (
+          <ImportExampleRunbook
+            onImported={() =>
+              axios
+                .get<Response<RunbookListItem[]>>('/api/runbooks')
+                .then(res => setRunbooks(res.data.data))
+                .catch(() => undefined)
+            }
+          />
+        )}
         {canEdit && (
           <Card classes='variables-card'>
             <form
@@ -286,6 +302,11 @@ const RunbookDetail = (props: { id: number }): JSX.Element => {
         siteId: Number(siteId) || undefined,
         deviceId: Number(deviceId) || undefined
       });
+      const approval = heldApproval(res.data.data);
+      if (approval) {
+        setError(approvalMessage(approval));
+        return;
+      }
       history.push(`/runbooks/runs/${res.data.data.id}`);
     } catch (err) {
       setError(apiError(err, 'Could not start the runbook.'));
@@ -368,6 +389,17 @@ const RunbookDetail = (props: { id: number }): JSX.Element => {
                         value={step.note}
                         onChange={e => updateStep(index, { note: e.target.value })}
                       />
+                      {(() => {
+                        const chosen = snippets.find(item => item.id === step.snippetId);
+                        return chosen ? (
+                          <StepValuesEditor
+                            code={chosen.code}
+                            definitions={chosen.variables || []}
+                            value={step.values || {}}
+                            onChange={values => updateStep(index, { values })}
+                          />
+                        ) : null;
+                      })()}
                     </div>
                     <div className='runbook-step-order'>
                       <button type='button' className='btn btn-sm btn-outline-secondary' onClick={() => moveStep(index, -1)} disabled={index === 0} aria-label='Move up'>
@@ -437,6 +469,7 @@ const RunbookDetail = (props: { id: number }): JSX.Element => {
                   <p className='eyebrow'>Runbook</p>
                   <h2 className='runbook-title'>{runbook.title}</h2>
                   {runbook.description && <p className='text-muted mb-0'>{runbook.description}</p>}
+                  <DangerousToggle key={runbook.id} endpoint={`/api/runbooks/${runbook.id}/dangerous`} value={Boolean(runbook.dangerous)} />
                 </div>
                 {canEdit && (
                   <div className='variable-row-actions'>

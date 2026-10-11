@@ -38,15 +38,18 @@ export const SiteModel = sequelize.define<SiteInstance>(
 export interface SiteMember {
   siteId: number;
   userId: number;
+  /** 'member', or 'admin' to manage the site's enrolment tokens */
+  role: string;
 }
 
-export interface SiteMemberInstance extends Model<SiteMember>, SiteMember {}
+export interface SiteMemberInstance extends Model<SiteMember, Optional<SiteMember, 'role'>>, SiteMember {}
 
 export const SiteMemberModel = sequelize.define<SiteMemberInstance>(
   'SiteMember',
   {
     siteId: { type: INTEGER, primaryKey: true },
-    userId: { type: INTEGER, primaryKey: true }
+    userId: { type: INTEGER, primaryKey: true },
+    role: { type: STRING(20), allowNull: false, defaultValue: 'member' }
   },
   { tableName: 'site_members', timestamps: false }
 );

@@ -5,6 +5,7 @@ import { Card, Layout } from '../components/UI';
 import { DeviceListItem, Response } from '../typescript/interfaces';
 import { dateParser } from '../utils';
 import { DeviceOsIcon, deviceAddress, formatUptime, osKind } from '../components/Sites/DeviceCard';
+import { BulkEnrolPanel } from '../components/Devices/BulkEnrolPanel';
 
 type Status = 'all' | 'online' | 'offline' | 'attention';
 type SortKey = 'name' | 'site' | 'lastSeen' | 'disk' | 'memory';
@@ -44,6 +45,7 @@ export const Devices = (): JSX.Element => {
   const siteFilter = params.get('site') || '';
   const osFilter = params.get('os') || '';
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: 'name', desc: false });
+  const [bulkOpen, setBulkOpen] = useState(false);
 
   const load = () =>
     axios
@@ -137,8 +139,21 @@ export const Devices = (): JSX.Element => {
             <h1>Every machine running the agent</h1>
             <p>Open a device for its services, scheduled tasks, processes, software, updates and logs.</p>
           </div>
+          <button type='button' className='btn btn-sm btn-primary' onClick={() => setBulkOpen(!bulkOpen)} aria-expanded={bulkOpen}>
+            {bulkOpen ? 'Close bulk enrol' : 'Bulk enrol'}
+          </button>
         </section>
       </div>
+
+      {bulkOpen ? (
+        <div className='col-12'>
+          <Card classes='variables-card'>
+            <BulkEnrolPanel />
+          </Card>
+        </div>
+      ) : (
+        <></>
+      )}
 
       <div className='col-12'>
         <div className='device-summary'>
@@ -266,6 +281,24 @@ export const Devices = (): JSX.Element => {
                       <td>
                         {device.agentVersion || '?'}
                         {device.updateAvailable && <span className='device-update-badge'>update</span>}
+{device.clonePendingApproval && (
+                          <span className='device-update-badge device-pending-badge' title='A self-enrolled clone; it gets no jobs until an admin approves it'>
+                            Pending approval
+                          </span>
+                        )}
+                        {device.fingerprintPendingReview && (
+                          <span className='device-update-badge device-duplicate-badge' title='The first hardware fingerprint came from an unexpected address'>
+                            fingerprint review
+                          </span>
+                        )}
+{device.possibleDuplicate && (
+                          <span
+                            className='device-update-badge device-duplicate-badge'
+                            title={`Possible duplicate of device ${(device.duplicateOf || []).map(id => `#${id}`).join(', ')}`}
+                          >
+                            possible duplicate
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))}

@@ -6,7 +6,10 @@
   running as SYSTEM; settings live in C:\ProgramData\SnippyCode\agent.json.
 #>
 $ErrorActionPreference = 'Stop'
-$AgentVersion = '1.3.0'
+$AgentVersion = '1.4.0'
+# Ed25519 public keys (base64 DER, space-separated), filled in when a release
+# is signed. Kept for parity with the Linux agent; see Update-Agent.
+$AgentUpdatePublicKeys = ''
 $Root = Join-Path $env:ProgramData 'SnippyCode'
 $Work = Join-Path $Root 'work'
 $MaxOutputChars = 1000000
@@ -28,6 +31,78 @@ if ($Url -notmatch '^https://' -and $Url -notmatch '^http://(localhost|127\.)' -
 }
 
 New-Item -ItemType Directory -Force -Path $Work | Out-Null
+
+# Stable random agent ID, created once, readable only by SYSTEM and admins
+function Get-AgentId([string]$Dir) {
+  $file = Join-Path $Dir 'agent-id'
+  $id = ''
+  if (Test-Path $file) { $id = ((Get-Content $file -Raw) -replace '[^a-fA-F0-9-]', '').ToLower() }
+  if ($id.Length -ne 36) {
+    $id = [guid]::NewGuid().ToString()
+    New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+    Set-Content -Path $file -Value $id -Encoding ascii
+    try { & icacls.exe $file /inheritance:r /grant:r 'SYSTEM:F' 'Administrators:F' | Out-Null } catch { }
+  }
+  return $id
+}
+$AgentId = Get-AgentId $Root
+
+function Set-AgentId([string]$Dir, [string]$Id) {
+  $file = Join-Path $Dir 'agent-id'
+  Set-Content -Path $file -Value $Id -Encoding ascii
+  try { & icacls.exe $file /inheritance:r /grant:r 'SYSTEM:F' 'Administrators:F' | Out-Null } catch { }
+}
+
+# Hardware fingerprint: sha256 of MachineGuid, sorted physical MACs and the
+# BIOS serial where available. Only the hash ever leaves this machine.
+function Get-HardwareFingerprint {
+  $guid = ''
+  try { $guid = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Cryptography' -Name MachineGuid -ErrorAction Stop).MachineGuid } catch { }
+  $macs = ''
+  try {
+    $macs = (@(Get-CimInstance Win32_NetworkAdapter -Filter 'PhysicalAdapter=True' -ErrorAction Stop |
+      Where-Object { $_.MACAddress } | ForEach-Object { $_.MACAddress.ToLower().Replace('-', ':') }) |
+      Sort-Object -Unique) -join ','
+  } catch { }
+  $serial = ''
+  try { $serial = [string](Get-CimInstance Win32_BIOS -ErrorAction Stop).SerialNumber } catch { }
+  $bytes = [Text.Encoding]::UTF8.GetBytes("$guid|$macs,|$($serial.Trim())")
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try { return (($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) -join '') } finally { $sha.Dispose() }
+}
+$Fingerprint = Get-HardwareFingerprint
+$Headers['X-Agent-Fingerprint'] = $Fingerprint
+
+# Health check used after an update: exit 0 when the server accepts our token on this hardware (the fingerprint header is checked)
+if ($args -contains '-SelfTest') {
+  try {
+    Invoke-WebRequest -UseBasicParsing -Uri "$Url/api/agent/ping" -Headers $Headers -TimeoutSec 20 | Out-Null
+    exit 0
+  } catch { exit 1 }
+}
+
+# The server refused this token on this hardware (a cloned disk or VM).
+# Swap it for a new device at the same site via clone self-enrol: no
+# enrolment token is kept on disk. The original device is never touched.
+function Invoke-Reenrol {
+  try {
+    $enrolled = Invoke-RestMethod -Method Post -Uri "$Url/api/agent/clone-enroll" -TimeoutSec 30 -Headers $script:Headers -Body @{
+      agentId = $script:AgentId; hostname = $env:COMPUTERNAME; version = $AgentVersion
+    }
+  } catch {
+    Write-Log "Clone enrolment was refused ($($_.Exception.Message)). Rerun install.ps1 -ResetId with an enrolment token."
+    return $false
+  }
+  if ($enrolled.data.agentId) {
+    $script:AgentId = [string]$enrolled.data.agentId
+    Set-AgentId $Root $script:AgentId
+  }
+  $config.DeviceToken = $enrolled.data.token
+  $config | ConvertTo-Json | Set-Content -Path (Join-Path $Root 'agent.json') -Encoding UTF8
+  $script:Headers = @{ Authorization = "Bearer $($enrolled.data.token)"; 'X-Agent-Fingerprint' = $Fingerprint }
+  Write-Log 'Enrolled this clone as its own device; it stays idle until an admin approves it'
+  return $true
+}
 
 function Get-Capabilities {
   $found = @('powershell', 'cmd')
@@ -79,27 +154,16 @@ function Send-Facts {
   }
 }
 
-# Replace this script with the server's newer agent and start it again. The
-# new file must parse and report the expected version before it is used.
+# Windows agents do not update themselves. Windows PowerShell/.NET has no
+# built-in Ed25519 verifier, and trusting an openssl.exe found on PATH while
+# running as SYSTEM would let a local user plant one (binary planting).
+# Update Windows agents by re-running install.ps1 (or your RMM / GPO) until a
+# native verifier ships. See docs/agent-updates.md.
+$script:UpdateNoticeShown = $false
 function Update-Agent([string]$Latest) {
-  if ($config.PSObject.Properties['AutoUpdate'] -and -not $config.AutoUpdate) { return }
-  $self = $PSCommandPath
-  $new = Join-Path $Work 'agent.new.ps1'
-  try {
-    Invoke-WebRequest -UseBasicParsing -Uri "$Url/agent/snippycode-agent.ps1" -OutFile $new -TimeoutSec 60
-    $errors = $null
-    [System.Management.Automation.Language.Parser]::ParseFile($new, [ref]$null, [ref]$errors) | Out-Null
-    if ($errors.Count -gt 0 -or -not (Select-String -Path $new -Pattern "AgentVersion = '$Latest'" -Quiet)) {
-      throw 'The downloaded agent did not check out'
-    }
-    Move-Item -Force $new $self
-    Write-Log "Updated from $AgentVersion to $Latest; restarting"
-    Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden `
-      -ArgumentList "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$self`""
-    exit 0
-  } catch {
-    Remove-Item $new -Force -ErrorAction SilentlyContinue
-    Write-Log "Update to $Latest failed ($($_.Exception.Message)); staying on $AgentVersion"
+  if (-not $script:UpdateNoticeShown) {
+    Write-Log "Agent $Latest is available. Windows agents update by re-running install.ps1 (no self-update without a native signature check)."
+    $script:UpdateNoticeShown = $true
   }
 }
 
@@ -182,7 +246,7 @@ while ($true) {
 
   try {
     $caps = [uri]::EscapeDataString((Get-Capabilities))
-    $response = Invoke-WebRequest -UseBasicParsing -Uri "$Url/api/agent/next?wait=25&version=$AgentVersion&caps=$caps" `
+    $response = Invoke-WebRequest -UseBasicParsing -Uri "$Url/api/agent/next?wait=25&version=$AgentVersion&caps=$caps&agentId=$AgentId" `
       -Headers $Headers -TimeoutSec 45
 
     $latest = [string]$response.Headers['X-Agent-Latest']
@@ -204,7 +268,14 @@ while ($true) {
   } catch {
     $status = $null
     if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
-    if ($status -eq 401 -or $status -eq 403) {
+    $reenrol = $false
+    if ($status -eq 409 -and $_.Exception.Response.Headers) {
+      try { $reenrol = [bool]$_.Exception.Response.Headers['X-Reenrol-Required'] } catch { }
+    }
+    if ($reenrol) {
+      Write-Log 'The server says this device token belongs to other hardware; re-enrolling'
+      if (-not (Invoke-Reenrol)) { Start-Sleep -Seconds 300 }
+    } elseif ($status -eq 401 -or $status -eq 403) {
       Write-Log 'The device token was rejected (revoked?). Retrying in 5 minutes.'
       Start-Sleep -Seconds 300
     } else {

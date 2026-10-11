@@ -102,8 +102,12 @@ export const queueAgentJob = async (options: {
   runbookRunId?: number | null;
   runbookStepId?: number | null;
   scheduleRunId?: number | null;
-}): Promise<AgentJobInstance> =>
-  AgentJobModel.create({
+}): Promise<AgentJobInstance> => {
+  // Backstop: a clone waiting for approval never gets code or secrets
+  if (options.device.clonePendingApproval) {
+    throw new Error(`${options.device.name} is waiting for clone approval`);
+  }
+  return AgentJobModel.create({
     deviceId: options.device.id,
     siteId: options.device.siteId,
     snippetId: options.snippet.id,
@@ -120,6 +124,7 @@ export const queueAgentJob = async (options: {
     runbookStepId: options.runbookStepId || null,
     scheduleRunId: options.scheduleRunId || null
   });
+};
 
 /**
  * Queue a built-in tool (services, tasks, shell...) for a device.
@@ -130,6 +135,9 @@ export const queueToolJob = async (options: {
   args?: Record<string, unknown>;
   userId?: number | null;
 }): Promise<AgentJobInstance> => {
+  if (options.device.clonePendingApproval) {
+    throw new Error(`${options.device.name} is waiting for clone approval`);
+  }
   const os = deviceToolOs(options.device);
 
   if (!os) {
@@ -363,6 +371,14 @@ const canServerRun = (language: string): boolean =>
  * Run one step: on the run's device if it has one, otherwise on the server.
  * Device steps finish later, when the agent reports back.
  */
+/** Replace only the placeholders a step sets; everything else is filled later as usual */
+const applyStepValues = (code: string, values: Record<string, string>): string =>
+  Object.keys(values).length
+    ? code.replace(/(\$?)\{\{([A-Z][A-Z0-9_]{0,63})(?::[^}\n]*)?\}\}/g, (whole, dollar, name) =>
+        !dollar && values[name] !== undefined ? values[name] : whole
+      )
+    : code;
+
 export const executeRunbookStep = async (
   run: RunbookRunInstance,
   stepId: number,
@@ -390,14 +406,26 @@ export const executeRunbookStep = async (
   }
 
   const site = run.siteId ? await SiteModel.findByPk(run.siteId) : null;
+  // Step values are applied first; a value can pass another one through,
+  // e.g. {{SITE_SHARE}}, which is then filled like any other placeholder
+  const stepValues = Object.fromEntries(
+    Object.entries(step.values || {}).filter(([name]) => !(options.explicit && name in options.explicit))
+  );
   const rendered = await renderSnippetFor({
-    code: snippet.code,
+    code: applyStepValues(snippet.code, stepValues),
+    definitions: snippet.variables,
     userId: options.userId,
     siteId: run.siteId,
     explicit: options.explicit,
     deviceValues: device ? deviceVariableValues(device, site?.name) : undefined,
     includeSecrets: true
   });
+
+  if (rendered.errors.length || rendered.missingRequired.length) {
+    throw new Error(
+      [...rendered.errors, ...rendered.missingRequired.map(name => `${name} needs a value`)].join('; ')
+    );
+  }
 
   if (device) {
     await queueAgentJob({

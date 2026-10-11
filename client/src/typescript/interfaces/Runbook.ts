@@ -1,3 +1,4 @@
+import type { VariableDefinition } from '../../utils/snippetVariables';
 import { SiteRef, SnippetRunRecord } from './Site';
 
 export interface RunbookStep {
@@ -6,7 +7,8 @@ export interface RunbookStep {
   snippetId: number | null;
   title: string;
   note: string;
-  snippet?: { id: number; title: string; language: string } | null;
+  values?: Record<string, string>;
+  snippet?: { id: number; title: string; language: string; variables?: VariableDefinition[] } | null;
 }
 
 export interface Runbook {
@@ -15,6 +17,7 @@ export interface Runbook {
   description: string;
   steps: RunbookStep[];
   updatedAt: string;
+  dangerous?: boolean;
 }
 
 export type RunbookRunStatus = 'in_progress' | 'completed' | 'cancelled' | 'failed' | 'attention';
@@ -39,6 +42,7 @@ export interface RunbookListItem {
   title: string;
   description: string;
   stepCount: number;
+  dangerous?: boolean;
   updatedAt: string;
   lastRun: RunbookRunSummary | null;
 }

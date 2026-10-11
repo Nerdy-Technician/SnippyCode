@@ -33,6 +33,7 @@ import { PerformanceTab } from '../components/Devices/PerformanceTab';
 import { FilesTab } from '../components/Devices/FilesTab';
 import { TerminalTab } from '../components/Devices/TerminalTab';
 import { DeviceFieldsCard } from '../components/Devices/DeviceFieldsCard';
+import { DeviceTagsEditor } from '../components/Devices/DeviceTagsEditor';
 import { AlertList } from '../components/Alerts/AlertList';
 import { AuthContext } from '../store';
 import { hasMinimumRole } from '../utils/roles';
@@ -246,6 +247,7 @@ const SummaryTab = (props: { device: Detail; onTab: (tab: Tab) => void }) => {
     ['Last boot', audit?.boot ? localTime(audit.boot) : undefined],
     ['Logged-in users', audit?.users || 'None'],
     ['Timezone', device.facts.timezone],
+    ['Agent ID', device.agentId || 'not reported yet'],
     ['Agent', `${device.agentVersion}${device.updateAvailable ? ` (update to ${device.latestAgentVersion} pending)` : ''}`]
   ];
 
@@ -997,6 +999,16 @@ export const DeviceDetail = (): JSX.Element => {
   const { device, error, busy, runTool, act, notice, setNotice, load } = useDevice(Number(id));
   const { user } = useContext(AuthContext);
   const canAck = hasMinimumRole(user?.role, 'user');
+  const isAdmin = hasMinimumRole(user?.role, 'admin');
+  const [cloneError, setCloneError] = useState('');
+  const decideClone = (decision: 'approve' | 'deny') => {
+    if (decision === 'deny' && !window.confirm('Deny this clone? It is revoked and its token deleted.')) return;
+    setCloneError('');
+    axios
+      .post(`/api/devices/${id}/${decision}-clone`)
+      .then(() => load())
+      .catch(err => setCloneError(apiError(err, 'Could not update the clone.')));
+  };
   const [dialog, setDialog] = useState<'run' | null>(null);
   const tabParam = new URLSearchParams(location.search).get('tab') as Tab;
   const tab: Tab = (TABS as readonly string[]).includes(tabParam) ? tabParam : 'summary';
@@ -1085,10 +1097,39 @@ export const DeviceDetail = (): JSX.Element => {
                 <span>
                   agent {device.agentVersion}
                   {device.updateAvailable && <span className='device-update-badge'>update</span>}
+{device.clonePendingApproval && (
+                          <span className='device-update-badge device-pending-badge' title='A self-enrolled clone; it gets no jobs until an admin approves it'>
+                            Pending approval
+                          </span>
+                        )}
+                        {device.fingerprintPendingReview && (
+                          <span className='device-update-badge device-duplicate-badge' title='The first hardware fingerprint came from an unexpected address'>
+                            fingerprint review
+                          </span>
+                        )}
+{device.possibleDuplicate && (
+                          <span
+                            className='device-update-badge device-duplicate-badge'
+                            title={`Possible duplicate of device ${(device.duplicateOf || []).map(id => `#${id}`).join(', ')}`}
+                          >
+                            possible duplicate
+                          </span>
+                        )}
                 </span>
               </p>
             </div>
             <div className='site-header-actions'>
+              {device.clonePendingApproval && isAdmin && (
+                <>
+                  <button type='button' className='btn btn-sm btn-success' onClick={() => decideClone('approve')}>
+                    Approve clone
+                  </button>
+                  <button type='button' className='btn btn-sm btn-outline-danger' onClick={() => decideClone('deny')}>
+                    Deny clone
+                  </button>
+                </>
+              )}
+              {cloneError && <span className='text-danger small'>{cloneError}</span>}
               {device.canAct && (
                 <button type='button' className='btn btn-sm btn-primary' onClick={() => setDialog('run')}>
                   Run snippet…
@@ -1148,6 +1189,7 @@ export const DeviceDetail = (): JSX.Element => {
               <Freshness entry={entry} busy={Boolean(busy.system)} online={device.online} onRefresh={() => runTool('system')} label='System audit' />
             )}
             <SummaryTab device={device} onTab={setTab} />
+            <DeviceTagsEditor deviceId={device.id} tags={device.tags || []} onSaved={load} />
             <DeviceFieldsCard device={device} address={deviceAddress(device)} onSaved={load} />
           </>
         ) : tab === 'performance' ? (

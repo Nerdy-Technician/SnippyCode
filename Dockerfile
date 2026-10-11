@@ -36,6 +36,8 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/build ./build
 COPY --from=build /app/public ./public
 COPY agent ./agent
+# In-app help pages and the example runbook
+COPY docs ./docs
 RUN mkdir -p data/backups
 
 EXPOSE 5000

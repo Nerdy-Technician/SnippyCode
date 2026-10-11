@@ -1,0 +1,177 @@
+{
+  "exportedAt": "2026-10-11T00:00:00.000Z",
+  "snippets": [
+    {
+      "title": "Disk cleanup: report usage",
+      "description": "Shows usage for CLEANUP_MOUNT and the largest directories under /var.",
+      "language": "bash",
+      "code": "#!/usr/bin/env bash\n# Report disk usage and stop early if the box is already healthy.\nset -euo pipefail\nMOUNT=\"{{CLEANUP_MOUNT:/}}\"\nTHRESHOLD=\"{{CLEANUP_THRESHOLD_PCT:80}}\"\nused=\"$(df -P \"$MOUNT\" | awk 'NR==2 {gsub(\"%\", \"\", $5); print $5}')\"\necho \"$(hostname): $MOUNT is ${used}% full (threshold ${THRESHOLD}%)\"\ndf -h \"$MOUNT\"\necho \"Largest directories under /var:\"\ndu -xh --max-depth=1 /var 2>/dev/null | sort -rh | head -n 10\n",
+      "docs": "",
+      "isPinned": false,
+      "collection": "Runbook: Linux disk cleanup",
+      "fileName": "disk-report.sh",
+      "tags": [
+        "runbook",
+        "linux",
+        "maintenance"
+      ],
+      "variables": [
+        {
+          "name": "CLEANUP_MOUNT",
+          "type": "string",
+          "default": "/",
+          "required": true,
+          "description": "Mount point to check, e.g. / or /var"
+        },
+        {
+          "name": "CLEANUP_THRESHOLD_PCT",
+          "type": "number",
+          "default": "80",
+          "required": true,
+          "description": "Warn when usage is at or above this percentage"
+        }
+      ]
+    },
+    {
+      "title": "Disk cleanup: trim logs",
+      "description": "Vacuums the journal and deletes rotated logs older than LOG_RETENTION_DAYS.",
+      "language": "bash",
+      "code": "#!/usr/bin/env bash\n# Trim the systemd journal and old rotated logs.\nset -euo pipefail\nKEEP_DAYS=\"{{LOG_RETENTION_DAYS:14}}\"\nif command -v journalctl >/dev/null 2>&1; then\n  journalctl --vacuum-time=\"${KEEP_DAYS}d\"\nfi\nfind /var/log -type f \\( -name '*.gz' -o -name '*.[0-9]' -o -name '*.old' \\) -mtime +\"$KEEP_DAYS\" -print -delete\necho \"Old logs older than ${KEEP_DAYS} days removed.\"\n",
+      "docs": "",
+      "isPinned": false,
+      "collection": "Runbook: Linux disk cleanup",
+      "fileName": "trim-logs.sh",
+      "tags": [
+        "runbook",
+        "linux",
+        "maintenance"
+      ],
+      "variables": [
+        {
+          "name": "LOG_RETENTION_DAYS",
+          "type": "number",
+          "default": "14",
+          "required": true,
+          "description": "Keep journal and rotated logs for this many days"
+        }
+      ]
+    },
+    {
+      "title": "Disk cleanup: package caches",
+      "description": "Autoremove and clean for apt, dnf or yum.",
+      "language": "bash",
+      "code": "#!/usr/bin/env bash\n# Clear package caches and unused packages (apt, dnf or yum).\nset -euo pipefail\nif command -v apt-get >/dev/null 2>&1; then\n  export DEBIAN_FRONTEND=noninteractive\n  apt-get -y autoremove --purge\n  apt-get -y clean\nelif command -v dnf >/dev/null 2>&1; then\n  dnf -y autoremove\n  dnf clean all\nelif command -v yum >/dev/null 2>&1; then\n  yum -y autoremove\n  yum clean all\nelse\n  echo \"No supported package manager found, skipping.\"\nfi\n",
+      "docs": "",
+      "isPinned": false,
+      "collection": "Runbook: Linux disk cleanup",
+      "fileName": "package-cache.sh",
+      "tags": [
+        "runbook",
+        "linux",
+        "maintenance"
+      ],
+      "variables": []
+    },
+    {
+      "title": "Disk cleanup: docker prune",
+      "description": "Prunes Docker data older than DOCKER_PRUNE_HOURS when CLEANUP_DOCKER is yes.",
+      "language": "bash",
+      "code": "#!/usr/bin/env bash\n# Prune stopped containers, dangling images and build cache older than the cut-off.\nset -euo pipefail\nENABLED=\"{{CLEANUP_DOCKER:yes}}\"\nif [ \"$ENABLED\" != \"yes\" ]; then\n  echo \"Docker cleanup turned off (CLEANUP_DOCKER), skipping.\"\n  exit 0\nfi\nif ! command -v docker >/dev/null 2>&1; then\n  echo \"Docker is not installed, skipping.\"\n  exit 0\nfi\nHOURS=\"{{DOCKER_PRUNE_HOURS:168}}\"\ndocker system prune -f --filter \"until=${HOURS}h\"\n",
+      "docs": "",
+      "isPinned": false,
+      "collection": "Runbook: Linux disk cleanup",
+      "fileName": "docker-prune.sh",
+      "tags": [
+        "runbook",
+        "linux",
+        "maintenance"
+      ],
+      "variables": [
+        {
+          "name": "CLEANUP_DOCKER",
+          "type": "choice",
+          "default": "yes",
+          "required": false,
+          "description": "Prune unused Docker data",
+          "choices": [
+            "yes",
+            "no"
+          ]
+        },
+        {
+          "name": "DOCKER_PRUNE_HOURS",
+          "type": "number",
+          "default": "168",
+          "required": false,
+          "description": "Only prune Docker data older than this many hours"
+        }
+      ]
+    },
+    {
+      "title": "Disk cleanup: verify",
+      "description": "Exits 1 if the mount is still above CLEANUP_THRESHOLD_PCT, which fails the run.",
+      "language": "bash",
+      "code": "#!/usr/bin/env bash\n# Fail the run (and alert) if the disk is still above the threshold.\nset -euo pipefail\nMOUNT=\"{{CLEANUP_MOUNT:/}}\"\nTHRESHOLD=\"{{CLEANUP_THRESHOLD_PCT:80}}\"\nused=\"$(df -P \"$MOUNT\" | awk 'NR==2 {gsub(\"%\", \"\", $5); print $5}')\"\necho \"$(hostname): $MOUNT is now ${used}% full\"\nif [ \"$used\" -ge \"$THRESHOLD\" ]; then\n  echo \"Still above ${THRESHOLD}%. Needs a person to look.\" >&2\n  exit 1\nfi\nif [ -f /var/run/reboot-required ]; then\n  echo \"Note: this machine is waiting for a reboot (/var/run/reboot-required).\"\nfi\n",
+      "docs": "",
+      "isPinned": false,
+      "collection": "Runbook: Linux disk cleanup",
+      "fileName": "disk-verify.sh",
+      "tags": [
+        "runbook",
+        "linux",
+        "maintenance"
+      ],
+      "variables": [
+        {
+          "name": "CLEANUP_MOUNT",
+          "type": "string",
+          "default": "/",
+          "required": true,
+          "description": "Mount point to check, e.g. / or /var"
+        },
+        {
+          "name": "CLEANUP_THRESHOLD_PCT",
+          "type": "number",
+          "default": "80",
+          "required": true,
+          "description": "Warn when usage is at or above this percentage"
+        }
+      ]
+    }
+  ],
+  "runbook": {
+    "title": "Linux disk cleanup",
+    "description": "Frees space on a Linux device: report, trim logs, clear package caches, prune Docker, then verify. Variables: CLEANUP_MOUNT, CLEANUP_THRESHOLD_PCT, LOG_RETENTION_DAYS, CLEANUP_DOCKER, DOCKER_PRUNE_HOURS.",
+    "steps": [
+      {
+        "snippet": "Disk cleanup: report usage",
+        "title": "Report disk usage",
+        "note": "Read the numbers before deleting anything."
+      },
+      {
+        "snippet": "Disk cleanup: trim logs",
+        "title": "Trim logs",
+        "note": "Keeps LOG_RETENTION_DAYS days of logs (default 14)."
+      },
+      {
+        "snippet": "Disk cleanup: package caches",
+        "title": "Clear package caches",
+        "note": ""
+      },
+      {
+        "snippet": "Disk cleanup: docker prune",
+        "title": "Prune Docker",
+        "note": "Set CLEANUP_DOCKER=no on sites where Docker data must be kept."
+      },
+      {
+        "title": "Check nothing important was removed",
+        "note": "Manual step: confirm services are healthy. Scheduled runs pause here with status 'attention'; delete this step if the runbook should run fully unattended."
+      },
+      {
+        "snippet": "Disk cleanup: verify",
+        "title": "Verify free space",
+        "note": "Fails the run if the disk is still above CLEANUP_THRESHOLD_PCT."
+      }
+    ]
+  }
+}

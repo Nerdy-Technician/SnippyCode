@@ -14,9 +14,13 @@ concurrency:
 
 jobs:
   checks:
-    name: Lint, typecheck, test, build
+    name: Lint, typecheck, test, build (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
     services:
       postgres:
         image: postgres:16-alpine
@@ -39,10 +43,12 @@ jobs:
       CI: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: |
             package-lock.json
@@ -64,24 +70,121 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Test
-        run: npm test
+      - name: Server tests
+        env:
+          TEST_COVERAGE: ${{ matrix.node == 22 && '1' || '0' }}
+        run: npm run test:server
 
-      - name: Check agent scripts
-        run: |
-          bash -n agent/install.sh
-          bash -n agent/snippycode-agent.sh
-          shellcheck -S warning agent/install.sh agent/snippycode-agent.sh
+      - name: Client tests
+        run: npm run test:client -- --coverage --coverageDirectory=coverage
+
+      - name: Upload coverage
+        if: always() && matrix.node == 22
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: |
+            coverage/lcov.info
+            client/coverage/
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Build (tsc + client)
         run: npm run build
 
-  docker:
-    name: Docker image build
+  migrations:
+    name: Migrations (fresh and upgrade from v1.2.2)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: snippycode
+          POSTGRES_PASSWORD: snippycode
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U snippycode"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGURL: postgres://snippycode:snippycode@localhost:5432
+      NODE_ENV: test
+      SESSION_SECRET: ci-placeholder
+      VARIABLES_SECRET_KEY: ci-placeholder
+      # Last released schema to upgrade from
+      UPGRADE_FROM: e0ea1bdc94727a97eb7dab9729808a14860d16fd
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build current tree
+        run: npm ci && npx tsc
+
+      - name: Fresh database
+        run: |
+          psql "$PGURL/postgres" -c 'CREATE DATABASE fresh'
+          DATABASE_URL="$PGURL/fresh" node scripts/ci-migrate.js build --expect build/db/migrations
+
+      - name: Build v1.2.2
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/v122" "$UPGRADE_FROM"
+          cd "$RUNNER_TEMP/v122" && npm ci && npx tsc
+
+      - name: Upgrade from the v1.2.2 schema
+        run: |
+          psql "$PGURL/postgres" -c 'CREATE DATABASE upgrade'
+          DATABASE_URL="$PGURL/upgrade" node scripts/ci-migrate.js "$RUNNER_TEMP/v122/build" --expect "$RUNNER_TEMP/v122/build/db/migrations"
+          DATABASE_URL="$PGURL/upgrade" node scripts/ci-migrate.js build --expect build/db/migrations
+
+  agent-scripts:
+    name: Agent scripts (shellcheck, PSScriptAnalyzer)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Bash syntax and shellcheck
+        run: |
+          for f in agent/*.sh; do bash -n "$f"; done
+          shellcheck -S warning agent/*.sh
+
+      - name: PowerShell parse and PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $failed = $false
+          foreach ($file in Get-ChildItem agent/*.ps1) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors.Count) { $errors | Format-List; $failed = $true }
+          }
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force
+          $findings = Invoke-ScriptAnalyzer -Path agent -Recurse -Severity Error
+          if ($findings) { $findings | Format-Table -AutoSize; $failed = $true }
+          if ($failed) { exit 1 }
+
+  docker:
+    name: Docker image build and scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Lint Dockerfile (errors only)
         run: docker run --rm -i hadolint/hadolint:latest-alpine hadolint --failure-threshold error - < Dockerfile
@@ -98,6 +201,16 @@ jobs:
         with:
           context: .
           push: false
+          load: true
           tags: snippycode:ci
           cache-from: type=gha,scope=ci
           cache-to: type=gha,mode=max,scope=ci
+
+      - name: Scan image (fail on fixable critical)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: snippycode:ci
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table

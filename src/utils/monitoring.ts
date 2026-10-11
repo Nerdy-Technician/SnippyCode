@@ -441,7 +441,7 @@ export const evaluateMonitors = async (now = new Date()): Promise<void> => {
   const [policies, monitors, devices, sites] = await Promise.all([
     PolicyModel.findAll({ where: { enabled: true } }),
     PolicyMonitorModel.findAll({ where: { enabled: true } }),
-    DeviceModel.findAll({ where: { revokedAt: null } }),
+    DeviceModel.findAll({ where: { revokedAt: null, clonePendingApproval: false } }),
     SiteModel.findAll()
   ]);
   const live = new Set<string>();

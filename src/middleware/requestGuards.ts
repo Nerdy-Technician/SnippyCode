@@ -1,5 +1,5 @@
 import { NextFunction, Request, Response } from 'express';
-import { rateLimit } from 'express-rate-limit';
+import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 
 const envNumber = (name: string, fallback: number): number => {
   const value = Number(process.env[name]);
@@ -73,3 +73,29 @@ export const csrfProtection = (req: Request, res: Response, next: NextFunction):
 
   next();
 };
+
+/**
+ * Enrolment limits. A bulk rollout from one office shares one address, so
+ * the per-address limit is generous; each token gets its own budget too, so
+ * a leaked token cannot be hammered from many addresses.
+ */
+export const enrollIpRateLimit = rateLimit({
+  windowMs: 15 * 60_000,
+  limit: envNumber('ENROLL_RATE_LIMIT_PER_IP', 300),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { success: false, error: 'Too many enrolments from this address, try again later' }
+});
+
+export const enrollTokenRateLimit = rateLimit({
+  windowMs: 15 * 60_000,
+  limit: envNumber('ENROLL_RATE_LIMIT_PER_TOKEN', 300),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  // Keyed by the token's public prefix; requests without one fall back to the address
+  keyGenerator: req => {
+    const token = String(req.body?.token || req.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+    return token.startsWith('sc_enroll_') ? `token:${token.slice(0, 16)}` : `ip:${ipKeyGenerator(req.ip || '')}`;
+  },
+  message: { success: false, error: 'Too many enrolments with this token, try again later' }
+});

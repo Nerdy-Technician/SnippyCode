@@ -5,10 +5,13 @@ import { sequelize } from '../db';
 import { asyncWrapper, AuthenticatedRequest } from '../middleware';
 import {
   DeviceModel,
+  SnippetInstance,
   SnippetModel,
   Snippet_TagModel,
   SnippetVersionModel,
-  TagModel
+  TagModel,
+  VariableModel,
+  SiteModel
 } from '../models';
 import {
   ErrorResponse,
@@ -48,7 +51,23 @@ import {
   deviceVariableValues,
   explainSnippet,
   convertSnippet,
-  searchByMeaning
+  searchByMeaning,
+  accessibleSiteIds,
+  REFERENCE_SOURCES
+} from '../utils';
+import {
+  approvalJson,
+  isAdminRole,
+  approvalReasons,
+  assertApprovalFresh,
+  contentHash,
+  dangerousContent,
+  isSnippetDangerous,
+  approvedRunId,
+  getApprovalSettings,
+  registerApprovalExecutor,
+  replayHandler,
+  requestApproval
 } from '../utils';
 import { getAiSettings } from '../utils/aiSettings';
 import { Body, SearchQuery, SnippetCreationAttributes } from '../typescript/interfaces';
@@ -318,7 +337,10 @@ export const updateSnippet = asyncWrapper(
     const wasPublic = Boolean(snippet.isPublic);
     // Fields left out of the body keep their stored value (see
     // validateSnippetBody); tags too, when the client does not send them.
-    const { tags: bodyTags, ...values } = <Body>req.body;
+    // The dangerous flag has its own endpoint (only admins may clear it)
+    const body = { ...req.body };
+    delete body.dangerous;
+    const { tags: bodyTags, ...values } = <Body>body;
     const requestTags = bodyTags ?? (await getTags(snippet.id));
     const parsedRequestTags = tagParser([...requestTags, values.language.toLowerCase()]);
 
@@ -446,7 +468,8 @@ export const patchSnippetFlags = asyncWrapper(
     }
 
     const wasPublic = Boolean(snippet.isPublic);
-    const changes = <{ isPinned?: number; isPublic?: boolean }>req.body;
+    const changes = <{ isPinned?: number; isPublic?: boolean; dangerous?: boolean }>{ ...req.body };
+    delete changes.dangerous;
 
     await snippet.update(changes);
 
@@ -566,6 +589,7 @@ export const getRawCode = asyncWrapper(
         ? (
             await renderSnippetFor({
               code: snippet.code,
+              definitions: snippet.variables,
               siteId,
               explicit,
               includeSecrets: true
@@ -696,6 +720,96 @@ export const assistSnippet = asyncWrapper(
   }
 );
 
+/** Values that fail their type, or required ones still missing */
+const variableProblem = (rendered: { errors: string[]; missingRequired: string[] }): string | null => {
+  const problems = [...rendered.errors, ...rendered.missingRequired.map(name => `${name} needs a value`)];
+  return problems.length ? problems.join('; ') : null;
+};
+
+/**
+ * @description Flag a snippet as dangerous (its runs need approval).
+ * Editors can set the flag; only admins can clear it.
+ * @route /api/snippets/:id/dangerous
+ * @request PUT
+ */
+export const setSnippetDangerous = asyncWrapper(
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+    const snippet = await SnippetModel.findByPk(Number(req.params.id));
+
+    if (!snippet) {
+      return next(new ErrorResponse(404, 'Snippet was not found'));
+    }
+
+    const dangerous = Boolean(req.body?.dangerous);
+    if (!dangerous && snippet.dangerous && !isAdminRole(req.user?.role)) {
+      return next(new ErrorResponse(403, 'Only admins can clear the dangerous flag'));
+    }
+
+    if (dangerous !== snippet.dangerous) {
+      await snippet.update({ dangerous });
+      await auditLog(dangerous ? 'snippet.flagged_dangerous' : 'snippet.unflagged_dangerous', {
+        ...auditActor(req),
+        target: `snippet:${snippet.id}`,
+        metadata: { title: snippet.title }
+      });
+    }
+
+    res.status(200).json({ data: { id: snippet.id, dangerous } });
+  }
+);
+
+/**
+ * Dangerous snippets and large runs wait for an admin. Responds 202 with the
+ * approval request and returns true when the run was held.
+ */
+const holdForApproval = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  snippet: SnippetInstance,
+  site: { id: number; name: string } | null,
+  targets: Array<{ type: 'device' | 'site'; id: number | null; name: string }>
+): Promise<boolean> => {
+  // Exactly what would run: re-computed on replay and compared (TOCTOU)
+  const hash = contentHash({
+    kind: 'snippet',
+    id: snippet.id,
+    language: snippet.language,
+    code: snippet.code,
+    definitions: snippet.variables || [],
+    values: readVariableValues(req.body?.variables),
+    siteId: site?.id || null,
+    targets: targets.map(target => `${target.type}:${target.id}`).sort()
+  });
+  const approved = approvedRunId(req);
+  if (approved) {
+    await assertApprovalFresh(approved, hash);
+    return false;
+  }
+  // A server run reaches one machine; device runs count every device queued
+  const why = approvalReasons({ dangerous: isSnippetDangerous(snippet), targetCount: targets.length }, await getApprovalSettings());
+  if (!why.length) return false;
+  const rules = dangerousContent(snippet.code);
+
+  const approval = await requestApproval({
+    kind: 'snippet',
+    title: snippet.title,
+    why,
+    requestedBy: req.user?.id || null,
+    reason: req.body?.reason,
+    snippetId: snippet.id,
+    siteId: site?.id || null,
+    targets,
+    targetCount: targets.length,
+    payload: { siteId: req.body?.siteId, deviceIds: req.body?.deviceIds, variables: req.body?.variables },
+    ipAddress: requestIp(req),
+    contentHash: hash,
+    contentPreview: `${rules.length ? `# Matched rules: ${rules.join(', ')}\n` : ''}# ${snippet.language}\n${snippet.code}`,
+    siteIds: site ? [site.id] : []
+  });
+  res.status(202).json({ data: { approval: approvalJson(approval) } });
+  return true;
+};
+
 export const runSnippet = asyncWrapper(
   async (
     req: AuthenticatedRequest,
@@ -723,6 +837,8 @@ export const runSnippet = asyncWrapper(
         where: {
           siteId: site.id,
           revokedAt: null,
+          // Clones waiting for approval get no jobs
+          clonePendingApproval: false,
           ...(wanted ? { id: wanted.length ? wanted : [-1] } : {})
         }
       });
@@ -733,17 +849,32 @@ export const runSnippet = asyncWrapper(
 
       const jobs = [];
       let secretsUsed: string[] = [];
+      const renders = [];
 
-      // Each device gets its own DEVICE_* values
+      // Each device gets its own DEVICE_* values; check them all before queueing any
       for (const device of devices) {
         const rendered = await renderSnippetFor({
           code: snippet.code,
+          definitions: snippet.variables,
           userId: req.user?.id,
           siteId: site.id,
           explicit: readVariableValues(req.body?.variables),
           deviceValues: deviceVariableValues(device, site.name),
           includeSecrets: true
         });
+        const problem = variableProblem(rendered);
+        if (problem) {
+          return next(new ErrorResponse(400, devices.length > 1 ? `${device.name}: ${problem}` : problem));
+        }
+        renders.push({ device, rendered });
+      }
+
+      // Values are checked first, so nobody is asked to approve a run that cannot start
+      if (await holdForApproval(req, res, snippet, site, devices.map(d => ({ type: 'device' as const, id: d.id, name: d.name })))) {
+        return;
+      }
+
+      for (const { device, rendered } of renders) {
         secretsUsed = rendered.secretsUsed;
         jobs.push(
           await queueAgentJob({
@@ -799,11 +930,19 @@ export const runSnippet = asyncWrapper(
     try {
       const rendered = await renderSnippetFor({
         code: snippet.code,
+        definitions: snippet.variables,
         userId: req.user?.id,
         siteId: site?.id,
         explicit: readVariableValues(req.body?.variables),
         includeSecrets: true
       });
+      const problem = variableProblem(rendered);
+      if (problem) {
+        return next(new ErrorResponse(400, problem));
+      }
+      if (await holdForApproval(req, res, snippet, site, [{ type: 'site', id: site?.id || null, name: site?.name || 'Server' }])) {
+        return;
+      }
       const run = await runAndRecord({
         snippet,
         code: rendered.code,
@@ -1193,6 +1332,7 @@ export const renderSnippet = asyncWrapper(
 
     const rendered = await renderSnippetFor({
       code: snippet.code,
+      definitions: snippet.variables,
       userId: req.user?.id,
       siteId: site?.id,
       explicit: readVariableValues(req.body?.variables),
@@ -1369,3 +1509,61 @@ export const searchByMeaningRoute = asyncWrapper(
     }
   }
 );
+
+/**
+ * @description Where snippet variable definitions can be imported from:
+ * other snippets' definitions, and saved variables (personal, team and the
+ * sites you can access) by NAME ONLY, never their values.
+ * @route /api/snippets/variable-sources
+ * @request GET
+ */
+export const getVariableSources = asyncWrapper(
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const [snippets, siteIds] = await Promise.all([
+      SnippetModel.findAll({ attributes: ['id', 'title', 'variables'], order: [['title', 'ASC']] }),
+      accessibleSiteIds(req.user || {})
+    ]);
+    const saved = await VariableModel.findAll({
+      attributes: ['name', 'userId', 'siteId', 'isSecret', 'description'],
+      where: {
+        [Op.or]: [
+          { userId: req.user?.id || -1 },
+          { userId: null, siteId: null },
+          { userId: null, siteId: siteIds === 'all' ? { [Op.ne]: null } : siteIds.length ? siteIds : [-1] }
+        ]
+      },
+      order: [['name', 'ASC']]
+    });
+    const sites = await SiteModel.findAll({ attributes: ['id', 'name'] });
+
+    res.status(200).json({
+      data: {
+        snippets: snippets
+          .filter(snippet => (snippet.variables || []).length)
+          .map(snippet => ({ id: snippet.id, title: snippet.title, variables: snippet.variables })),
+        saved: saved.map(variable => ({
+          name: variable.name,
+          scope: variable.userId ? 'personal' : variable.siteId ? 'site' : 'team',
+          siteName: variable.siteId ? sites.find(site => site.id === variable.siteId)?.name || null : null,
+          isSecret: variable.isSecret,
+          description: variable.description
+        })),
+        // Hook: a dedicated secrets store would be listed here too
+        sources: REFERENCE_SOURCES
+      }
+    });
+  }
+);
+
+registerApprovalExecutor('snippet', async (approval, payload, requester) => {
+  const { status, body } = await replayHandler(runSnippet, {
+    params: { id: String(approval.snippetId) },
+    body: payload,
+    user: requester,
+    approvalId: approval.id
+  });
+  const data = body?.data || {};
+  return data.jobs
+    ? `Queued on ${data.jobs.length} device(s)`
+    : `Server run #${data.runId} finished (${status}, exit ${data.exitCode ?? '-'})`;
+});

@@ -1,8 +1,9 @@
+import { loadRelease, releaseDir } from './utils/agentRelease';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import express, { Express, Request, Response } from 'express';
 import cookieParser from 'cookie-parser';
-import { apiRateLimit, csrfProtection, errorHandler, securityHeaders } from './middleware';
+import { apiRateLimit, csrfProtection, errorHandler, requireAuth, securityHeaders } from './middleware';
 
 // Routers
 import { snippetRouter } from './routes/snippets';
@@ -14,6 +15,9 @@ import { variableRouter } from './routes/variables';
 import { siteRouter } from './routes/sites';
 import { runRouter } from './routes/runs';
 import { runbookRouter } from './routes/runbooks';
+import { helpRouter } from './routes/help';
+import { approvalRouter } from './routes/approvals';
+import { tagRouter } from './routes/tags';
 import { agentRouter, deviceRouter } from './routes/devices';
 import { scheduleRouter } from './routes/schedules';
 import { notificationRouter } from './routes/notifications';
@@ -66,12 +70,23 @@ export const createApp = (options: AppOptions = {}): Express => {
   app.use('/api/sites', siteRouter);
   app.use('/api/runs', runRouter);
   app.use('/api/runbooks', runbookRouter);
+  app.use('/api/help', requireAuth, helpRouter);
+  app.use('/api/approvals', approvalRouter);
+  app.use('/api/tags', tagRouter);
   app.use('/api/devices', deviceRouter);
   app.use('/api/schedules', scheduleRouter);
   app.use('/api/notifications', notificationRouter);
   app.use('/api/alerts', alertRouter);
   app.use('/api/policies', policyRouter);
   app.use('/api/agent', express.urlencoded({ extended: false, limit: '256kb' }), agentRouter);
+  // Signed release agents (public key embedded) win over the repo copies, so
+  // new installs get the same verified build that updates deliver
+  app.get(['/agent/snippycode-agent.sh', '/agent/snippycode-agent.ps1'], (req: Request, res: Response, next) => {
+    const file = join(releaseDir(), req.path.slice('/agent/'.length));
+    if (!loadRelease() || !existsSync(file)) return next();
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.sendFile(file);
+  });
   // Agent install scripts and the agents themselves
   app.use(
     '/agent',

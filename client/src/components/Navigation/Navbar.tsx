@@ -8,6 +8,7 @@ import { Route } from '../../typescript/interfaces';
 import { canEditSnippets, hasMinimumRole } from '../../utils';
 import routeConfig from './routes.json';
 import { CommandPalette } from './CommandPalette';
+import axios from 'axios';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -18,6 +19,22 @@ export const Navbar = (): JSX.Element => {
   const [profileOpen, setProfileOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+
+  const [pendingApprovals, setPendingApprovals] = useState(0);
+  const isAdmin = hasMinimumRole(user?.role, 'admin');
+
+  // In-app notice for approvers: a count of runs waiting on them
+  useEffect(() => {
+    if (!isAdmin) return;
+    const load = () =>
+      axios
+        .get<{ data: { pending: number } }>('/api/approvals/count')
+        .then(res => setPendingApprovals(res.data?.data?.pending || 0))
+        .catch(() => undefined);
+    load();
+    const timer = window.setInterval(load, 60_000);
+    return () => window.clearInterval(timer);
+  }, [isAdmin, location.pathname]);
 
   // Close the mobile menu after navigating
   useEffect(() => setMenuOpen(false), [location.pathname]);
@@ -61,6 +78,11 @@ export const Navbar = (): JSX.Element => {
               <li className='nav-item' key={dest}>
                 <NavLink exact={dest === '/'} to={dest} className='nav-link'>
                   {name}
+                  {dest === '/approvals' && pendingApprovals > 0 && (
+                    <span className='badge rounded-pill bg-warning text-dark ms-1' aria-label={`${pendingApprovals} waiting`}>
+                      {pendingApprovals}
+                    </span>
+                  )}
                 </NavLink>
               </li>
             ))}

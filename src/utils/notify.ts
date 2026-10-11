@@ -23,8 +23,11 @@ export const NOTIFICATION_EVENTS: { id: string; label: string }[] = [
   { id: 'site.changed', label: 'A site was created, changed, or deleted' },
   { id: 'device.enrolled', label: 'A device was enrolled' },
   { id: 'device.offline', label: 'A device went offline' },
+  { id: 'device.clone_pending', label: 'A cloned machine enrolled itself and needs approval' },
+  { id: 'device.fingerprint_review', label: 'A device fingerprint needs review' },
   { id: 'backup.completed', label: 'A backup finished' },
-  { id: 'backup.failed', label: 'A backup failed' }
+  { id: 'backup.failed', label: 'A backup failed' },
+  { id: 'approval.requested', label: 'A risky run is waiting for approval' }
 ];
 
 export type Severity = 'info' | 'success' | 'warning' | 'error';

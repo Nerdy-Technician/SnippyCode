@@ -8,10 +8,12 @@ import {
   getRunbookRuns,
   getRunbooks,
   startRunbookRun,
+  setRunbookDangerous,
   updateRunbook,
   updateRunbookRunStep
 } from '../controllers/runbooks';
 import { requireAuth, requireMinimumRole } from '../middleware';
+import { importExampleRunbook } from '../controllers/help';
 
 export const runbookRouter = Router();
 
@@ -26,9 +28,11 @@ runbookRouter.route('/runs/:runId/cancel').post(editor, cancelRunbookRun);
 runbookRouter.route('/runs/:runId/steps/:stepId').post(editor, updateRunbookRunStep);
 
 runbookRouter.route('/').get(getRunbooks).post(editor, createRunbook);
+runbookRouter.route('/example').post(editor, importExampleRunbook);
 runbookRouter
   .route('/:id')
   .get(getRunbook)
   .put(editor, updateRunbook)
   .delete(editor, deleteRunbook);
 runbookRouter.route('/:id/runs').post(editor, startRunbookRun);
+runbookRouter.route('/:id/dangerous').put(editor, setRunbookDangerous);

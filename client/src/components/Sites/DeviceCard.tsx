@@ -28,6 +28,8 @@ interface Props {
   onHistory: (device: Device) => void;
   onRename: (device: Device) => void;
   onRevoke: (device: Device) => void;
+  /** Admins: clear the possible-duplicate flag */
+  onClearDuplicate?: (device: Device) => void;
 }
 
 export const osKind = (device: Device): 'linux' | 'windows' | 'mac' | 'other' => {
@@ -291,6 +293,24 @@ export const DeviceCard = (props: Props): JSX.Element => {
         <span className='device-version'>
           agent {device.agentVersion || '?'}
           {device.updateAvailable && <span className='device-update-badge'>update</span>}
+{device.clonePendingApproval && (
+                          <span className='device-update-badge device-pending-badge' title='A self-enrolled clone; it gets no jobs until an admin approves it'>
+                            Pending approval
+                          </span>
+                        )}
+                        {device.fingerprintPendingReview && (
+                          <span className='device-update-badge device-duplicate-badge' title='The first hardware fingerprint came from an unexpected address'>
+                            fingerprint review
+                          </span>
+                        )}
+{device.possibleDuplicate && (
+                          <span
+                            className='device-update-badge device-duplicate-badge'
+                            title={`Possible duplicate of device ${(device.duplicateOf || []).map(id => `#${id}`).join(', ')}`}
+                          >
+                            possible duplicate
+                          </span>
+                        )}
         </span>
       </footer>
 
@@ -316,6 +336,11 @@ export const DeviceCard = (props: Props): JSX.Element => {
                 <button type='button' onClick={() => props.onRename(device)}>
                   Rename
                 </button>
+                {device.possibleDuplicate && props.onClearDuplicate && (
+                  <button type='button' onClick={() => props.onClearDuplicate!(device)}>
+                    Clear duplicate
+                  </button>
+                )}
                 <button type='button' className='is-danger' onClick={() => props.onRevoke(device)}>
                   Revoke access
                 </button>

@@ -1,4 +1,5 @@
 import { useContext, useEffect, useState } from 'react';
+import { DangerousToggle } from '../Approvals/DangerousToggle';
 import { Link, useHistory } from 'react-router-dom';
 import axios from 'axios';
 import { AuthContext, SnippetsContext } from '../../store';
@@ -52,6 +53,7 @@ export const SnippetDetails = (props: Props): JSX.Element => {
     collection,
     fileName,
     isPublic,
+    dangerous,
     usage,
     personal
   } = props.snippet;
@@ -277,6 +279,10 @@ export const SnippetDetails = (props: Props): JSX.Element => {
       <div className='metric-row'>
         <span>Visibility</span>
         <span className='fw-bold'>{isPublic ? 'Public' : 'Private'}</span>
+      </div>
+
+      <div className='metric-row'>
+        <DangerousToggle endpoint={`/api/snippets/${id}/dangerous`} value={Boolean(dangerous)} />
       </div>
 
       <div className='metric-row'>
@@ -615,6 +621,7 @@ export const SnippetDetails = (props: Props): JSX.Element => {
           snippet={props.snippet}
           site={site}
           inputs={inputs}
+          resolved={variables}
           onClose={() => {
             setShowRunModal(false);
             setSnippet(id);

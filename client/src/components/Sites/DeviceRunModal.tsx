@@ -1,5 +1,6 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
+import { approvalMessage, heldApproval } from '../../utils/approvals';
 import { SnippetsContext } from '../../store';
 import { AgentJobState, Device, Response } from '../../typescript/interfaces';
 import { apiError } from '../Variables/VariableFields';
@@ -61,8 +62,14 @@ export const DeviceRunModal = (props: Props): JSX.Element => {
     try {
       const res = await axios.post<Response<{ jobs: AgentJobState[] }>>(`/api/snippets/${chosen.id}/run`, {
         siteId,
-        deviceIds: [device.id]
+        deviceIds: [device.id],
+        reason: chosen.dangerous ? window.prompt('This snippet is flagged dangerous. Why are you running it?') || '' : ''
       });
+      const approval = heldApproval(res.data.data);
+      if (approval) {
+        setError(approvalMessage(approval));
+        return;
+      }
       const queued = res.data.data.jobs[0];
       setJob(queued);
 

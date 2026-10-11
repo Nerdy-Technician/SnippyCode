@@ -85,6 +85,17 @@ export const SiteDevices = (props: Props): JSX.Element => {
     }
   };
 
+  const clearDuplicate = async (device: Device) => {
+    if (window.confirm(`Clear the possible-duplicate flag on ${device.name}?`)) {
+      try {
+        await axios.post(`/api/devices/${device.id}/clear-duplicate`);
+        reload();
+      } catch (err) {
+        setError(apiError(err, 'Could not clear the duplicate flag.'));
+      }
+    }
+  };
+
   const closeEnrollment = () => {
     setEnrollment(null);
     setAdding(false);
@@ -137,7 +148,7 @@ export const SiteDevices = (props: Props): JSX.Element => {
                 </div>
               ) : (
                 <span className='form-text'>
-                  Valid for {enrollment.maxUses === 1 ? 'one device' : `${enrollment.maxUses} devices`} until{' '}
+                  Valid for {enrollment.maxUses === 1 ? 'one device' : enrollment.maxUses === null ? 'any number of devices' : `${enrollment.maxUses} devices`} until{' '}
                   {dateParser(enrollment.expiresAt).formatted}. Shown only once.
                 </span>
               )}
@@ -215,6 +226,7 @@ export const SiteDevices = (props: Props): JSX.Element => {
               onHistory={item => setDialog({ device: item, mode: 'history' })}
               onRename={rename}
               onRevoke={revoke}
+              onClearDuplicate={clearDuplicate}
             />
           ))}
         </div>

@@ -1,5 +1,6 @@
+import { assertSecretKeyConfigured } from './utils/secretBox';
 import dotenv from 'dotenv';
-import { Logger, monitoringTick, onSchedulerTick, runAutomaticBackup, startScheduler } from './utils';
+import { Logger, githubSyncTick, monitoringTick, onSchedulerTick, runAutomaticBackup, startScheduler } from './utils';
 import { connectDB } from './db';
 import { associateModels } from './db/associateModels';
 import { createApp } from './app';
@@ -12,12 +13,14 @@ const PORT = process.env.PORT || 5000;
 const app = createApp();
 
 (async () => {
+  assertSecretKeyConfigured();
   await connectDB();
   await associateModels();
   onSchedulerTick(async now => {
     await runAutomaticBackup(now);
   });
   onSchedulerTick(monitoringTick);
+  onSchedulerTick(githubSyncTick);
   startScheduler();
 
   app.listen(PORT, () => {

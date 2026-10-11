@@ -2,6 +2,7 @@
  * Monitoring: policy scopes, file listings, and (with TEST_DATABASE_URL) the
  * alert lifecycle, policy schedules, patch compliance and site reports.
  */
+import './testDbEnv';
 import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'http';

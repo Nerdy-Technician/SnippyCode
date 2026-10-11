@@ -155,6 +155,7 @@ export const Sites = (): JSX.Element => {
   const [error, setError] = useState('');
   const [users, setUsers] = useState<{ id: number; displayName: string; email: string; role: string }[]>([]);
   const [memberIds, setMemberIds] = useState<number[]>([]);
+  const [adminIds, setAdminIds] = useState<number[]>([]);
   const [membersNotice, setMembersNotice] = useState('');
   const [runbooks, setRunbooks] = useState<RunbookListItem[]>([]);
   const [runbookToStart, setRunbookToStart] = useState('');
@@ -212,6 +213,7 @@ export const Sites = (): JSX.Element => {
     setError('');
     setMembersNotice('');
     setMemberIds(site?.memberIds || []);
+    setAdminIds(site?.adminIds || []);
 
     if (site) {
       setRuns(null);
@@ -361,7 +363,10 @@ export const Sites = (): JSX.Element => {
     }
 
     try {
-      await axios.put(`/api/sites/${site.id}/members`, { userIds: memberIds });
+      await axios.put(`/api/sites/${site.id}/members`, {
+        userIds: memberIds,
+        adminIds: adminIds.filter(id => memberIds.includes(id))
+      });
       setMembersNotice('Members saved.');
       getSites();
     } catch (err) {
@@ -909,7 +914,7 @@ export const Sites = (): JSX.Element => {
               )}
             </div>
 
-            {current.access === 'members' && canManageSites && (
+            {canManageSites && (
               eligibleMembers.length === 0 ? (
                 <div className='site-empty'>
                   <p>
@@ -932,10 +937,27 @@ export const Sites = (): JSX.Element => {
                               e.target.checked ? [...currentIds, item.id] : currentIds.filter(memberId => memberId !== item.id)
                             )
                           }
+                          aria-label={`${item.displayName} is a member`}
                         />
                         <span className='member-name'>{item.displayName}</span>
                         <span className='member-email'>{item.email}</span>
                         <span className='site-tag'>{item.role}</span>
+                        <span className='member-admin' title='Site admins can create and revoke enrolment tokens for this site'>
+                          <input
+                            type='checkbox'
+                            className='form-check-input'
+                            checked={adminIds.includes(item.id) && memberIds.includes(item.id)}
+                            onChange={e => {
+                              const checked = e.target.checked;
+                              setAdminIds(ids => (checked ? [...ids, item.id] : ids.filter(id => id !== item.id)));
+                              if (checked) {
+                                setMemberIds(ids => (ids.includes(item.id) ? ids : [...ids, item.id]));
+                              }
+                            }}
+                            aria-label={`${item.displayName} is a site admin`}
+                          />{' '}
+                          Site admin
+                        </span>
                       </label>
                     ))}
                   </div>
