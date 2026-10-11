@@ -92,7 +92,7 @@ export const parsePsScriptAnalyzer = (output: string): LintDiagnostic[] => {
   }));
 };
 
-const LINTERS: { [language: string]: () => Linter } = {
+const LINTER_FACTORIES: { [language: string]: () => Linter } = {
   shell: () => ({
     tool: 'shellcheck',
     bin: process.env.SHELLCHECK_PATH || 'shellcheck',
@@ -118,6 +118,10 @@ const LINTERS: { [language: string]: () => Linter } = {
   })
 };
 
+// A Map lookup can only return one of the linters above, never an inherited
+// or user-named property
+const LINTERS = new Map<string, () => Linter>(Object.entries(LINTER_FACTORIES));
+
 const linterKey = (language: string): string | null => {
   const value = language.toLowerCase();
 
@@ -125,13 +129,13 @@ const linterKey = (language: string): string | null => {
     return 'shell';
   }
 
-  return Object.prototype.hasOwnProperty.call(LINTERS, value) ? value : null;
+  return LINTERS.has(value) ? value : null;
 };
 
 export const lintAvailability = (): { [language: string]: { tool: string; available: boolean } } => {
   const result: { [language: string]: { tool: string; available: boolean } } = {};
 
-  Object.entries(LINTERS).forEach(([language, make]) => {
+  Array.from(LINTERS.entries()).forEach(([language, make]) => {
     const linter = make();
     result[language] = { tool: linter.tool, available: onPath(linter.bin) };
   });
@@ -172,7 +176,7 @@ export const lintCode = (language: string, code: string): Promise<LintResult> =>
     return Promise.resolve({ tool: null, available: false, diagnostics: [] });
   }
 
-  const make = Object.prototype.hasOwnProperty.call(LINTERS, key) ? LINTERS[key] : undefined;
+  const make = LINTERS.get(key);
 
   if (typeof make !== 'function') {
     return Promise.resolve({ tool: null, available: false, diagnostics: [] });

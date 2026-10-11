@@ -59,7 +59,7 @@ export const createApp = (options: AppOptions = {}): Express => {
   app.use('/agent', apiRateLimit);
   app.use('/api/auth', authRouter);
   app.use('/api/snippets', snippetRouter);
-  app.get('/raw/:rawRef', getRawCode);
+  app.get('/raw/:rawRef', apiRateLimit, getRawCode);
   app.use('/api/tasks', taskRouter);
   app.use('/api/admin', adminRouter);
   app.use('/api/variables', variableRouter);
