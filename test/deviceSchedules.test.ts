@@ -5,6 +5,7 @@
  */
 import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { Op } from 'sequelize';
 import http from 'http';
 import { AddressInfo } from 'net';
 
@@ -245,15 +246,23 @@ describe('device-targeted schedules', { skip }, () => {
     assert.equal(denied.status, 400);
     assert.ok(!denied.text.includes('Bravo'), 'does not reveal the other site');
 
-    // A tag schedule made by Alice only ever reaches her sites
+    // A shared device tag spans every site, so tag-only targeting is admin-only
+    const tagOnly = await request('POST', '/api/schedules', {
+      body: { ...base, name: 'Alice web', snippetId: snippet.id, siteMode: 'devices', deviceTag: 'web' },
+      as: 'alice'
+    });
+    assert.equal(tagOnly.status, 403);
+
+    // A tag schedule an admin made that Alice last edited only reaches her sites
     const mine = await ok(
       request('POST', '/api/schedules', {
-        body: { ...base, name: 'Alice web', snippetId: snippet.id, siteMode: 'devices', deviceTag: 'web' },
-        as: 'alice'
+        body: { ...base, name: 'Alice web', snippetId: snippet.id, siteMode: 'devices', deviceTag: 'web' }
       }),
       201
     );
+    const alice = await models.UserModel.findOne({ where: { email: { [Op.iLike]: 'alice%' } } });
     const schedule = await models.ScheduleModel.findByPk(mine.id);
+    await schedule!.update({ updatedBy: alice!.id });
     assert.deepEqual(ids(await scheduler.scheduleDevices(schedule!)), ids([dev.a1]));
 
     // Admin-only modes stay admin-only
@@ -328,6 +337,10 @@ describe('device-targeted schedules', { skip }, () => {
       enabled: true
     });
     assert.equal(legacy.deviceIds, '');
+    // Nobody owns it: it reaches nothing until an admin saves it
+    assert.deepEqual(ids(await scheduler.scheduleDevices(legacy)), []);
+    const owner = await models.UserModel.findOne({ where: { role: 'owner' } });
+    await legacy.update({ createdBy: owner!.id });
     assert.deepEqual(ids(await scheduler.scheduleDevices(legacy)), ids([dev.a1, dev.a2]));
 
     const listed = await ok(request('GET', '/api/schedules'));
@@ -341,5 +354,59 @@ describe('device-targeted schedules', { skip }, () => {
     );
     assert.equal(server.runOn, 'server');
     assert.deepEqual(server.deviceIds, [], 'device targeting is ignored for server runs');
+  });
+
+  test("Linda's exploit: another site's schedule cannot be read, retargeted, run or deleted", async () => {
+    // A schedule on a Bravo device, made by an admin
+    const theirs = await ok(
+      request('POST', '/api/schedules', { body: { ...base, name: 'Bravo job', snippetId: snippet.id, siteMode: 'devices', deviceIds: [dev.b1.id] } }),
+      201
+    );
+    // Alice (Alpha only) gets the same 404 as for a missing schedule, everywhere
+    assert.equal((await request('GET', `/api/schedules/${theirs.id}/edit`, { as: 'alice' })).status, 404);
+    assert.equal(
+      (await request('PUT', `/api/schedules/${theirs.id}`, { body: { ...base, name: 'Mine now', snippetId: snippet.id, siteMode: 'devices', deviceIds: [dev.a1.id] }, as: 'alice' })).status,
+      404
+    );
+    assert.equal((await request('POST', `/api/schedules/${theirs.id}/run`, { as: 'alice' })).status, 404);
+    assert.equal((await request('DELETE', `/api/schedules/${theirs.id}`, { as: 'alice' })).status, 404);
+    const still = await models.ScheduleModel.findByPk(theirs.id);
+    assert.equal(still?.name, 'Bravo job');
+    assert.equal(still?.deviceIds, String(dev.b1.id));
+    const [refusals] = await db.sequelize.query(`SELECT COUNT(*)::int AS n FROM audit_logs WHERE action = 'schedule.access_refused' AND target = 'schedule:${theirs.id}'`);
+    assert.equal((refusals as any[])[0].n, 4);
+
+    // Her own schedule cannot be retargeted to a Bravo device, then run
+    const mine = await ok(
+      request('POST', '/api/schedules', { body: { ...base, name: 'Alpha job', snippetId: snippet.id, siteMode: 'devices', deviceIds: [dev.a1.id] }, as: 'alice' }),
+      201
+    );
+    const retarget = await request('PUT', `/api/schedules/${mine.id}`, {
+      body: { ...base, name: 'Alpha job', snippetId: snippet.id, siteMode: 'devices', deviceIds: [dev.b1.id] },
+      as: 'alice'
+    });
+    assert.equal(retarget.status, 400);
+    assert.equal((await models.ScheduleModel.findByPk(mine.id))?.deviceIds, String(dev.a1.id));
+
+    // Even if a Bravo device ends up in it, a run only reaches the NARROWER of
+    // creator and last editor: Alice's sites
+    const shared = await ok(
+      request('POST', '/api/schedules', { body: { ...base, name: 'Shared', snippetId: snippet.id, siteMode: 'devices', deviceIds: [dev.a1.id] } }),
+      201
+    );
+    await ok(request('PUT', `/api/schedules/${shared.id}`, { body: { ...base, name: 'Shared', snippetId: snippet.id, siteMode: 'devices', deviceIds: [dev.a1.id] }, as: 'alice' }));
+    const row = await models.ScheduleModel.findByPk(shared.id);
+    const alice = await models.UserModel.findOne({ where: { email: 'alice@example.test' } });
+    assert.equal(row?.updatedBy, alice!.id, 'every edit records the editor');
+    await row!.update({ deviceIds: `${dev.a1.id},${dev.b1.id}` });
+    assert.deepEqual(ids(await scheduler.scheduleDevices(row!)), ids([dev.a1]));
+    const run = await scheduler.startScheduleRun(row!, 'manual', null);
+    const jobs = await models.AgentJobModel.findAll({ where: { scheduleRunId: run.id } });
+    assert.deepEqual(jobs.map((job: any) => job.deviceId), [dev.a1.id]);
+
+    // Nobody responsible any more: refused
+    await row!.update({ createdBy: null, updatedBy: null });
+    const orphan = await scheduler.startScheduleRun(row!, 'manual', null);
+    assert.equal((await models.ScheduleRunModel.findByPk(orphan.id))?.status, 'failed');
   });
 });

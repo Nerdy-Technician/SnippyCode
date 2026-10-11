@@ -255,6 +255,12 @@ const readSchedule = async (req: AuthenticatedRequest, next: NextFunction) => {
     }
   }
 
+  // Shared device tags span every site in "devices" mode, like site tags
+  if (siteMode === 'devices' && tagIds.length && !isAdminRole(req.user?.role)) {
+    next(new ErrorResponse(403, 'Only admins can target a device tag across all sites; pick sites or devices'));
+    return null;
+  }
+
   if (siteMode === 'devices' && !devices.length && !tagIds.length) {
     next(new ErrorResponse(400, 'Choose devices or a device tag'));
     return null;
@@ -280,6 +286,42 @@ const readSchedule = async (req: AuthenticatedRequest, next: NextFunction) => {
     enabled: body.enabled !== false,
     nextRunAt: computeNextRun({ cron, timezone })
   };
+};
+
+/**
+ * Can this user act on the schedule as it is now? Admins can. Everyone else
+ * needs access to every site and device it currently targets; schedules
+ * reaching all sites, site tags, policies or shared device tags are admin-only.
+ */
+export const canManageSchedule = async (user: AuthenticatedRequest['user'], schedule: ScheduleInstance): Promise<boolean> => {
+  if (isAdminRole(user?.role)) return true;
+  if (['all', 'tag', 'policy'].includes(schedule.siteMode)) return false;
+  if (schedule.siteMode === 'devices' && parseIdList(schedule.deviceTagIds).length) return false;
+  const allowed = await accessibleSiteIds(user || {});
+  if (allowed === 'all') return true;
+  const siteIds = (schedule.siteIds || '').split(',').map(Number).filter(Boolean);
+  const deviceIds = (schedule.deviceIds || '').split(',').map(Number).filter(Boolean);
+  const devices = deviceIds.length ? await DeviceModel.findAll({ where: { id: deviceIds }, attributes: ['id', 'siteId'] }) : [];
+  return [...siteIds, ...devices.map(device => device.siteId)].every(id => allowed.includes(id));
+};
+
+/** findSchedule, then 404 (same as missing) unless the caller may act on it */
+const findManagedSchedule = async (req: AuthenticatedRequest, next: NextFunction) => {
+  const schedule = await ScheduleModel.findByPk(Number(req.params.id) || -1);
+
+  if (!schedule || !(await canManageSchedule(req.user, schedule))) {
+    if (schedule) {
+      await auditLog('schedule.access_refused', {
+        ...auditActor(req),
+        target: `schedule:${schedule.id}`,
+        metadata: { method: req.method, path: req.path }
+      });
+    }
+    next(new ErrorResponse(404, 'Schedule was not found'));
+    return null;
+  }
+
+  return schedule;
 };
 
 const findSchedule = async (req: AuthenticatedRequest, next: NextFunction) => {
@@ -370,7 +412,7 @@ export const createSchedule = asyncWrapper(
  */
 export const updateSchedule = asyncWrapper(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
-    const schedule = await findSchedule(req, next);
+    const schedule = await findManagedSchedule(req, next);
     if (schedule && req.body && req.body.variables) {
       req.body.variables = restoreMaskedValues(req.body.variables, schedule.variables, schedule.id);
     }
@@ -406,7 +448,7 @@ export const updateSchedule = asyncWrapper(
  */
 export const deleteSchedule = asyncWrapper(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
-    const schedule = await findSchedule(req, next);
+    const schedule = await findManagedSchedule(req, next);
 
     if (!schedule) {
       return;
@@ -431,7 +473,7 @@ export const deleteSchedule = asyncWrapper(
  */
 export const runScheduleNow = asyncWrapper(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
-    const schedule = await findSchedule(req, next);
+    const schedule = await findManagedSchedule(req, next);
 
     if (!schedule) {
       return;
@@ -456,7 +498,7 @@ export const runScheduleNow = asyncWrapper(
  */
 export const getScheduleForEdit = asyncWrapper(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
-    const schedule = await findSchedule(req, next);
+    const schedule = await findManagedSchedule(req, next);
 
     if (!schedule) {
       return;

@@ -72,6 +72,35 @@ const scheduleSites = async (schedule: ScheduleInstance): Promise<Array<{ id: nu
   return ids.length ? SiteModel.findAll({ where: { id: ids }, order: [['name', 'ASC']] }) : [];
 };
 
+/**
+ * The sites a schedule may reach at run time: the NARROWER of what its
+ * creator and its last editor can access (a non-admin editor cannot widen a
+ * schedule an admin made, and an admin's edit cannot widen a member's).
+ * Deleted users are ignored; null means nobody is responsible for it any
+ * more, so it must not run until an admin saves it.
+ */
+export const scheduleReach = async (
+  schedule: Pick<ScheduleInstance, 'createdBy' | 'updatedBy'>
+): Promise<number[] | 'all' | null> => {
+  const ids = Array.from(new Set([schedule.createdBy, schedule.updatedBy].filter((id): id is number => Boolean(id))));
+  const users = ids.length ? await UserModel.findAll({ where: { id: ids } }) : [];
+  if (!users.length) return null;
+  let reach: number[] | 'all' = 'all';
+  for (const user of users) {
+    const allowed = await accessibleSiteIds({ id: user.id, role: user.role });
+    if (allowed === 'all') continue;
+    reach = reach === 'all' ? allowed : reach.filter(id => allowed.includes(id));
+  }
+  return reach;
+};
+
+/** Sites a server run covers, narrowed to the schedule's reach */
+const reachableSites = async (schedule: ScheduleInstance) => {
+  const reach = await scheduleReach(schedule);
+  if (reach === null) return [];
+  const sites = await scheduleSites(schedule);
+  return reach === 'all' ? sites : sites.filter(site => site === null || reach.includes(site.id));
+};
 
 /**
  * The devices a device schedule runs on, worked out at run time so devices
@@ -110,14 +139,10 @@ export const scheduleDevices = async (schedule: ScheduleInstance) => {
   [...base, ...extra].forEach(device => byId.set(device.id, device));
   let devices = Array.from(byId.values());
 
-  const creator = schedule.createdBy ? await UserModel.findByPk(schedule.createdBy) : null;
-
-  if (creator) {
-    const allowed = await accessibleSiteIds({ id: creator.id, role: creator.role });
-
-    if (allowed !== 'all') {
-      devices = devices.filter(device => allowed.includes(device.siteId));
-    }
+  const reach = await scheduleReach(schedule);
+  if (reach === null) return [];
+  if (reach !== 'all') {
+    devices = devices.filter(device => reach.includes(device.siteId));
   }
 
   return devices.sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
@@ -185,12 +210,17 @@ export const startScheduleRun = async (
   // personal values, so results don't depend on who is signed in
   const owner = schedule.createdBy;
 
+  if ((await scheduleReach(schedule)) === null) {
+    await failScheduleRun(run, schedule, 'Nobody owns this schedule any more. An admin must save it before it can run.');
+    return run;
+  }
+
   // Risky runs wait for an admin. Everything the run would do (schedule
   // definition, values, code or steps, and the devices/sites it resolves to
   // right now) is hashed; an approved run is refused if any of it changed.
   const settings = await getApprovalSettings();
   const resolvedDevices = schedule.runOn === 'devices' ? await scheduleDevices(schedule) : [];
-  const resolvedSites = schedule.runOn === 'devices' ? [] : await scheduleSites(schedule);
+  const resolvedSites = schedule.runOn === 'devices' ? [] : await reachableSites(schedule);
   const content = runbook ? await runbookContent(runbook) : null;
   const scheduleHash = contentHash({
     kind: 'schedule',
@@ -273,12 +303,19 @@ export const startScheduleRun = async (
         const site = sites.find(item => item?.id === device.siteId);
         const rendered = await renderSnippetFor({
           code: snippet.code,
+          language: snippet.language,
           definitions: snippet.variables,
           siteId: device.siteId,
           deviceValues: deviceVariableValues(device, site?.name),
           explicit: decryptScheduleVariables(schedule.variables, schedule.id),
           includeSecrets: true
         });
+        if (rendered.errors.length) {
+          // A value that doesn't fit its type never reaches the device
+          logger.log(`Schedule ${schedule.id}: skipped device ${device.id}: ${rendered.errors.join('; ')}`, 'WARN');
+          await auditLog('schedule.value_refused', { target: `schedule:${schedule.id}`, metadata: { deviceId: device.id, errors: rendered.errors } });
+          continue;
+        }
         await queueAgentJob({
           device,
           snippet,
@@ -294,7 +331,7 @@ export const startScheduleRun = async (
     return run;
   }
 
-  const sites = await scheduleSites(schedule);
+  const sites = await reachableSites(schedule);
 
   if (!sites.length) {
     await failScheduleRun(run, schedule, 'No sites match this schedule.');
@@ -320,11 +357,13 @@ export const startScheduleRun = async (
         } else if (snippet) {
           const rendered = await renderSnippetFor({
             code: snippet.code,
+            language: snippet.language,
             definitions: snippet.variables,
             siteId: site?.id || null,
             explicit: decryptScheduleVariables(schedule.variables, schedule.id),
             includeSecrets: true
           });
+          if (rendered.errors.length) throw new Error(rendered.errors.join('; '));
           const snippetRun = await runAndRecord({
             snippet,
             code: rendered.code,
@@ -402,7 +441,9 @@ registerApprovalExecutor(
   async (approval, message) => {
     const schedule = await ScheduleModel.findByPk(approval.scheduleId || -1);
     const run = await ScheduleRunModel.findByPk(approval.scheduleRunId || -1);
-    if (schedule && run && run.status === 'awaiting_approval') {
+    // The executor may already have marked the run running before a stale
+    // approval was refused; either way it never ran, so close it as failed
+    if (schedule && run && ['awaiting_approval', 'running'].includes(run.status)) {
       await failScheduleRun(run, schedule, message);
     }
   }

@@ -12,6 +12,8 @@ export interface VariableDefinition {
   description: string;
   choices?: string[];
   ref?: string;
+  /** Inserted as written instead of quoted (admins only) */
+  raw?: boolean;
 }
 
 export const newDefinition = (name = '', defaultValue = ''): VariableDefinition => ({

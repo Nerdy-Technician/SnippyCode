@@ -58,6 +58,19 @@ pipefail` in bash and `exit 1` for "this needs a person".
 
 ## Variables and `{{templates}}`
 
+> **Values are quoted for you.** Every value is inserted as one quoted literal
+> for the snippet's language: POSIX single quotes for bash/sh, single quotes with
+> doubled quote characters for PowerShell, a JSON string for Python and
+> JavaScript. Batch (cmd) values that contain quotes, newlines or `% ! ^ & | < > ( )`
+> are refused. So write placeholders **bare**: `MOUNT={{CLEANUP_MOUNT:/}}` or
+> `Get-Item -Path {{PATH}}`, not `"{{CLEANUP_MOUNT}}"`. A value can never break out
+> into extra commands. Typed variables are checked first: a `number` must look like
+> a number, a `boolean` like true/false, and a `choice` must be one of its options.
+> An admin can mark a definition **raw** to insert it as written (for example a
+> list of flags). Raw is never imported from GitHub sync, and a non-admin who edits
+> the code clears it.
+
+
 Snippets use placeholders: `{{NAME}}` or `{{NAME:default}}`. Names are UPPER_SNAKE_CASE
 (`^[A-Z][A-Z0-9_]{0,63}$`), so `{{ name }}` (Mustache, Jinja, Helm) and `${{ ... }}`
 (GitHub Actions) are left alone. When a value is needed, the first source that has one

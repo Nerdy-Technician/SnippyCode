@@ -3,7 +3,9 @@ import { RunApprovalInstance, RunApprovalKind, RunApprovalModel, SiteMemberModel
 import { auditLog } from './audit';
 import { emitEvent } from './notify';
 import { getSetting, setSetting } from './oidcSettings';
-import { decryptSecret, encryptSecret } from './secretBox';
+import { decryptSecret, encryptSecret, isBoundSecret } from './secretBox';
+
+const payloadAad = (id: number) => `run_approvals:${id}:payload`;
 import { isAdminRole } from './siteAccess';
 import { Logger } from './Logger';
 
@@ -102,14 +104,16 @@ export const requestApproval = async (options: {
     siteId: options.siteId || null,
     targets: JSON.stringify(options.targets.slice(0, 500)),
     targetCount: options.targetCount,
-    // May hold variable values typed in for the run, so it is encrypted
-    payload: encryptSecret(JSON.stringify(options.payload || {})),
+    // Encrypted below, bound to this row (enc:v2 with AAD) once it has an id
+    payload: '',
     expiresAt: new Date(Date.now() + settings.expiryHours * 3_600_000),
     contentHash: options.contentHash,
     contentPreview: String(options.contentPreview || '').slice(0, 100_000),
     siteIds: Array.from(new Set((options.siteIds || []).filter(Boolean))).sort((a, b) => a - b).join(','),
     excludedApprovers: Array.from(new Set((options.excludedApprovers || []).filter(Boolean) as number[])).join(',')
   });
+  // May hold variable values typed in for the run, so it is encrypted
+  await approval.update({ payload: encryptSecret(JSON.stringify(options.payload || {}), payloadAad(approval.id)) });
 
   await auditLog('approval.requested', {
     userId: options.requestedBy,
@@ -140,7 +144,8 @@ export const requestApproval = async (options: {
 
 export const approvalPayload = (approval: RunApprovalInstance): any => {
   try {
-    return JSON.parse(decryptSecret(approval.payload) || '{}');
+    // v2 is bound to its row; older v1 payloads still read
+    return JSON.parse(decryptSecret(approval.payload, isBoundSecret(approval.payload) ? payloadAad(approval.id) : undefined) || '{}');
   } catch {
     return {};
   }

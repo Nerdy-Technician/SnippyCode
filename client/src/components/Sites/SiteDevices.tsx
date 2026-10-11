@@ -79,10 +79,19 @@ export const SiteDevices = (props: Props): JSX.Element => {
   };
 
   const revoke = async (device: Device) => {
-    if (window.confirm(`Revoke ${device.name}? Its agent stops working until it is enrolled again.`)) {
-      await axios.delete(`/api/devices/${device.id}`);
-      reload();
+    if (!window.confirm(`Revoke ${device.name}? Its agent stops working until it is enrolled again. Clones still waiting for approval are revoked with it.`)) {
+      return;
     }
+    // Approved clones keep their own access unless you revoke them too
+    // (do, if this device was compromised)
+    const approvedClones = (devices || []).filter(other => other.clonedFrom === device.id && !other.clonePendingApproval);
+    const revokeClones =
+      approvedClones.length > 0 &&
+      window.confirm(
+        `Also revoke ${approvedClones.length} approved clone(s) of ${device.name} (${approvedClones.map(clone => clone.name).join(', ')})? Choose OK if the device was compromised.`
+      );
+    await axios.delete(`/api/devices/${device.id}`, { data: { revokeClones } });
+    reload();
   };
 
   const clearDuplicate = async (device: Device) => {

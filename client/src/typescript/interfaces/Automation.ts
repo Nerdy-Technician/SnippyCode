@@ -23,7 +23,7 @@ export interface Device {
   possibleDuplicate?: boolean;
   /** Self-enrolled clone waiting for an admin; it gets no jobs until approved */
   clonePendingApproval?: boolean;
-  status?: 'active' | 'pending_approval';
+  status?: 'active' | 'pending_approval' | 'revoked';
   clonedFrom?: number | null;
   fingerprintPendingReview?: boolean;
   duplicateOf?: number[];

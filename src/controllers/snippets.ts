@@ -39,7 +39,8 @@ import {
   attachSnippetUsage,
   recordSnippetUsage,
   setSnippetFavorite,
-  renderTemplate,
+  renderTemplateSafe,
+  TemplateValueError,
   VARIABLE_NAME_PATTERN,
   findAccessibleSite,
   renderSnippetFor,
@@ -58,6 +59,7 @@ import {
 import {
   approvalJson,
   isAdminRole,
+  rawNames,
   approvalReasons,
   assertApprovalFresh,
   contentHash,
@@ -211,6 +213,11 @@ export const createSnippet = asyncWrapper(
       values.language.toLowerCase()
     ]);
 
+    // Only admins may mark a variable raw (inserted unquoted)
+    if (!isAdminRole(req.user?.role) && rawNames((values as any).variables).length) {
+      return next(new ErrorResponse(403, 'Only admins can mark a variable raw (unquoted)'));
+    }
+
     // Create snippet
     const rawSlug = rawSlugForSnippet(values);
     const snippet = await SnippetModel.create({
@@ -340,6 +347,19 @@ export const updateSnippet = asyncWrapper(
     // The dangerous flag has its own endpoint (only admins may clear it)
     const body = { ...req.body };
     delete body.dangerous;
+    // Only admins may mark a variable raw (inserted unquoted). A non-admin
+    // save keeps an admin's raw flags only while the code is unchanged;
+    // otherwise they are dropped and those values are quoted again
+    if (!isAdminRole(req.user?.role) && body.variables !== undefined) {
+      const before = new Set(rawNames(snippet.variables));
+      const asked = rawNames(body.variables);
+      if (asked.some(name => !before.has(name))) {
+        return next(new ErrorResponse(403, 'Only admins can mark a variable raw (unquoted)'));
+      }
+      if (body.code !== undefined && body.code !== snippet.code) {
+        body.variables = (body.variables as any[]).map(({ raw: _raw, ...def }) => def);
+      }
+    }
     const { tags: bodyTags, ...values } = <Body>body;
     const requestTags = bodyTags ?? (await getTags(snippet.id));
     const parsedRequestTags = tagParser([...requestTags, values.language.toLowerCase()]);
@@ -582,20 +602,29 @@ export const getRawCode = asyncWrapper(
       siteId = site.id;
     }
 
-    const body =
-      req.query.render === '0'
-        ? snippet.code
-        : authorized
-        ? (
-            await renderSnippetFor({
-              code: snippet.code,
-              definitions: snippet.variables,
-              siteId,
-              explicit,
-              includeSecrets: true
-            })
-          ).code
-        : renderTemplate(snippet.code, explicit);
+    // Values are type-checked and quoted for the snippet's language
+    let body = snippet.code;
+    if (req.query.render !== '0') {
+      if (authorized) {
+        const rendered = await renderSnippetFor({
+          code: snippet.code,
+          language: snippet.language,
+          definitions: snippet.variables,
+          siteId,
+          explicit,
+          includeSecrets: true
+        });
+        if (rendered.errors.length) return next(new ErrorResponse(400, rendered.errors.join('; ')));
+        body = rendered.code;
+      } else {
+        try {
+          body = renderTemplateSafe(snippet.code, { language: snippet.language, raw: rawNames(snippet.variables) }, explicit);
+        } catch (err) {
+          if (err instanceof TemplateValueError) return next(new ErrorResponse(400, err.message));
+          throw err;
+        }
+      }
+    }
 
     trackUsage(snippet.id, 'raw');
 
@@ -855,6 +884,7 @@ export const runSnippet = asyncWrapper(
       for (const device of devices) {
         const rendered = await renderSnippetFor({
           code: snippet.code,
+          language: snippet.language,
           definitions: snippet.variables,
           userId: req.user?.id,
           siteId: site.id,
@@ -930,6 +960,7 @@ export const runSnippet = asyncWrapper(
     try {
       const rendered = await renderSnippetFor({
         code: snippet.code,
+        language: snippet.language,
         definitions: snippet.variables,
         userId: req.user?.id,
         siteId: site?.id,
@@ -1332,6 +1363,7 @@ export const renderSnippet = asyncWrapper(
 
     const rendered = await renderSnippetFor({
       code: snippet.code,
+      language: snippet.language,
       definitions: snippet.variables,
       userId: req.user?.id,
       siteId: site?.id,
@@ -1356,7 +1388,8 @@ export const renderSnippet = asyncWrapper(
         code: rendered.code,
         sha256: createHash('sha256').update(rendered.code, 'utf8').digest('hex'),
         secretsUsed: rendered.secretsUsed,
-        missing: rendered.missing
+        missing: rendered.missing,
+        errors: rendered.errors
       }
     });
   }

@@ -69,6 +69,8 @@ export interface RolloutSettings {
   pausedReason?: string;
   /** Legacy (pre-1.4.0) agents: one-time unsigned hop, off after this date */
   bootstrapUntil?: string | null;
+  /** When the bootstrap window was first opened; it can never reach past 30 days from then */
+  bootstrapFirstArmed?: string | null;
 }
 
 export const DEFAULT_ROLLOUT: RolloutSettings = { mode: 'auto', rings: ['canary'], percent: 25, paused: false, bootstrapUntil: null };
@@ -162,17 +164,22 @@ export const cleanRollout = (input: Partial<RolloutSettings>, current: RolloutSe
   const rings = input.rings === undefined ? current.rings : input.rings;
   const until = input.bootstrapUntil === undefined ? current.bootstrapUntil : input.bootstrapUntil;
   const untilDate = until ? new Date(until) : null;
+  const validUntil = untilDate && !Number.isNaN(untilDate.getTime()) ? untilDate : null;
+  // The window is armed once; later saves cannot push it past 30 days from
+  // the first arming (no re-arming every 30 days)
+  const armedAt = current.bootstrapFirstArmed ? new Date(current.bootstrapFirstArmed).getTime() : validUntil ? Date.now() : NaN;
   return {
     mode: input.mode === 'manual' || input.mode === 'auto' ? input.mode : current.mode,
     rings: Array.from(new Set((Array.isArray(rings) ? rings : []).filter(ring => (RING_NAMES as readonly string[]).includes(ring)))) as UpdateRing[],
     percent: Math.min(100, Math.max(0, Math.round(Number(input.percent ?? current.percent) || 0))),
     paused: input.paused === undefined ? current.paused : Boolean(input.paused),
     pausedReason: input.paused === false ? '' : String(input.pausedReason ?? current.pausedReason ?? '').slice(0, 200),
-    // At most 30 days of the unsigned first hop
+    // At most 30 days of the unsigned first hop, counted from the first arming
     bootstrapUntil:
-      untilDate && !Number.isNaN(untilDate.getTime())
-        ? new Date(Math.min(untilDate.getTime(), Date.now() + 30 * 86_400_000)).toISOString()
-        : null
+      validUntil && Number.isFinite(armedAt) && armedAt + 30 * 86_400_000 > Date.now()
+        ? new Date(Math.min(validUntil.getTime(), armedAt + 30 * 86_400_000)).toISOString()
+        : null,
+    bootstrapFirstArmed: Number.isFinite(armedAt) ? new Date(armedAt).toISOString() : null
   };
 };
 

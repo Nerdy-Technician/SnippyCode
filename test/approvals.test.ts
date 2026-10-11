@@ -383,9 +383,23 @@ describe('run approvals', { skip }, () => {
     const current = await ok(request('GET', `/api/schedules/${schedule.id}`, { as: 'alice' }));
     await ok(request('PUT', `/api/schedules/${schedule.id}`, { body: { ...current, deviceIds: [devices[0].id, devices[3].id] }, as: 'alice' }));
     const before = await jobs();
+    // The stored payload is bound to its row (enc:v2 with AAD)
+    assert.match(String(approval!.payload), /^enc:v2:/);
     const decided = await ok(request('POST', `/api/approvals/${approval!.id}/approve`, { as: 'adam' }));
     assert.equal(decided.status, 'stale');
     assert.equal(await jobs(), before);
+    // The schedule run that waited for it is closed as failed, not left running
+    assert.equal((await models.ScheduleRunModel.findByPk(run.id))?.status, 'failed');
+  });
+
+  test('approval payloads are bound to their row; a payload moved to another row is unreadable', async () => {
+    const utils = await import('../src/utils/approvals');
+    const box = await import('../src/utils/secretBox');
+    const payload = box.encryptSecret(JSON.stringify({ variables: { A: '1' } }), 'run_approvals:41:payload');
+    assert.deepEqual(utils.approvalPayload({ id: 41, payload } as any), { variables: { A: '1' } });
+    assert.deepEqual(utils.approvalPayload({ id: 42, payload } as any), {});
+    // Older v1 payloads still read
+    assert.deepEqual(utils.approvalPayload({ id: 7, payload: box.encryptSecret('{"x":1}') } as any), { x: 1 });
   });
 
   test('A5: only the owner can change approval settings; refusals and changes are audited', async () => {

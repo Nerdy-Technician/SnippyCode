@@ -64,8 +64,14 @@ describe('agent auto-update', { skip }, () => {
           const text = Buffer.concat(chunks).toString('utf8');
           resolve({ status: res.statusCode || 0, text, headers: res.headers, json: () => JSON.parse(text) });
         });
+        // A dropped response must fail the test, not leave the promise pending
+        res.on('error', reject);
+        res.on('aborted', () => reject(new Error(`${method} ${path}: response aborted`)));
       });
       req.on('error', reject);
+      // A ref'd timer keeps the event loop alive and turns a hang into an error
+      // (a pending promise with nothing scheduled cancels the whole suite)
+      req.setTimeout(30_000, () => req.destroy(new Error(`${method} ${path}: no response after 30s`)));
       if (payload !== undefined) req.write(payload);
       req.end();
     });
@@ -145,7 +151,7 @@ describe('agent auto-update', { skip }, () => {
     agentUpdate = await import('../src/controllers/agentUpdate');
     const { createApp } = await import('../src/app');
     server = createApp({ clientDirs: [] }).listen(0, '127.0.0.1');
-    await new Promise(resolve => server.once('listening', resolve));
+    await new Promise<void>(resolve => (server.listening ? resolve() : server.once('listening', () => resolve())));
     port = (server.address() as AddressInfo).port;
 
     const setup = await request('POST', '/api/auth/setup', {
@@ -389,6 +395,20 @@ describe('agent auto-update', { skip }, () => {
     assert.ok(new Date(capped.bootstrapUntil).getTime() <= Date.now() + 30 * 86_400_000 + 5000, 'window capped at 30 days');
     await rollout({ bootstrapUntil: new Date(Date.now() - 1000).toISOString() });
     assert.equal(await latest(9), undefined, 'expired');
+
+    // The window cannot be re-armed: 30 days count from the first arming
+    const release = await import('../src/utils/agentRelease');
+    const day = 86_400_000;
+    const armed29 = release.cleanRollout(
+      { bootstrapUntil: new Date(Date.now() + 7 * day).toISOString() },
+      { ...release.DEFAULT_ROLLOUT, bootstrapFirstArmed: new Date(Date.now() - 29 * day).toISOString() }
+    );
+    assert.ok(new Date(armed29.bootstrapUntil!).getTime() <= Date.now() + day + 5000, 'only the rest of the first 30 days');
+    const armed31 = release.cleanRollout(
+      { bootstrapUntil: new Date(Date.now() + 7 * day).toISOString() },
+      { ...release.DEFAULT_ROLLOUT, bootstrapFirstArmed: new Date(Date.now() - 31 * day).toISOString() }
+    );
+    assert.equal(armed31.bootstrapUntil, null, 'a spent window stays shut');
     delete process.env.AGENT_BOOTSTRAP_SHA256;
   });
 

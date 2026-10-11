@@ -22,6 +22,8 @@ import {
   approveClone,
   denyClone,
   revokeDevice,
+  createCloneActivationToken,
+  reviewDeviceFingerprint,
   submitJobResult,
   submitFacts,
   updateDevice,
@@ -56,6 +58,8 @@ deviceRouter
   .delete(requireOwner, revokeDevice);
 deviceRouter.route('/:id/approve-clone').post(approveClone);
 deviceRouter.route('/:id/deny-clone').post(denyClone);
+deviceRouter.route('/:id/activation-token').post(createCloneActivationToken);
+deviceRouter.route('/:id/fingerprint-review').post(reviewDeviceFingerprint);
 deviceRouter.route('/:id/tools/:tool').post(runDeviceTool);
 deviceRouter.route('/:id/fields').put(updateDeviceFields);
 deviceRouter.route('/:id/tags').put(updateDeviceTags);

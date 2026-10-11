@@ -5,6 +5,13 @@ const PREFIX = 'enc:v1:';
 const PREFIX_V2 = 'enc:v2:';
 export const SECRET_MASK = '••••••';
 
+// Production never falls back to SESSION_SECRET (rotating the session secret
+// must not make stored secrets unreadable, and one leak must not expose both)
+const KEY_REQUIRED =
+  'VARIABLES_SECRET_KEY must be set when NODE_ENV=production. Upgrading from a ' +
+  'setup that relied on SESSION_SECRET? Set VARIABLES_SECRET_KEY to the same ' +
+  'value as SESSION_SECRET so existing secrets stay readable (see docs/upgrading-v1.2.3.md).';
+
 /**
  * AES-256-GCM key for secret variables. Prefer a dedicated VARIABLES_SECRET_KEY:
  * falling back to SESSION_SECRET means rotating that also makes stored
@@ -14,8 +21,8 @@ const secretKey = (): Buffer => {
   const material =
     process.env.VARIABLES_SECRET_KEY || process.env.SESSION_SECRET || '';
 
-  if (!material && process.env.NODE_ENV === 'production') {
-    throw new Error('VARIABLES_SECRET_KEY or SESSION_SECRET is required to store secrets');
+  if (process.env.NODE_ENV === 'production' && !process.env.VARIABLES_SECRET_KEY) {
+    throw new Error(KEY_REQUIRED);
   }
   // The dev-only key is never used in production (checked above and at startup)
 
@@ -35,8 +42,8 @@ export const isBoundSecret = (value: string): boolean => typeof value === 'strin
  * dev-only fallback can never encrypt production data.
  */
 export const assertSecretKeyConfigured = (): void => {
-  if (process.env.NODE_ENV === 'production' && !process.env.VARIABLES_SECRET_KEY && !process.env.SESSION_SECRET) {
-    throw new Error('VARIABLES_SECRET_KEY (or SESSION_SECRET) must be set when NODE_ENV=production');
+  if (process.env.NODE_ENV === 'production' && !process.env.VARIABLES_SECRET_KEY) {
+    throw new Error(KEY_REQUIRED);
   }
 };
 

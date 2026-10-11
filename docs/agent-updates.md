@@ -114,8 +114,7 @@ Agents before 1.4.0 have no verifier. They update only by downloading
 `/agent/snippycode-agent.sh` when a poll tells them to. That hop is **off**
 unless all of these hold:
 
-- an admin opens a bootstrap window (`bootstrapUntil`, at most 30 days),
-  after which it closes automatically
+- an admin opens a bootstrap window (`bootstrapUntil`). It can last at most 30 days from the first time it is opened and cannot be re-armed after that,
 - `AGENT_BOOTSTRAP_SHA256` in the server config matches the release's Linux
   agent, so only that exact signed 1.4.x build can be delivered
 - the staged rollout includes the device (canary first)

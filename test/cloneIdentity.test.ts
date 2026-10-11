@@ -444,9 +444,33 @@ describe('clone identity', { skip }, () => {
     assert.equal((await poll(denied.token, `fingerprint=${FP_B}`)).status, 401);
 
     const other = await ok(cloneEnroll(source.token, 'f'.repeat(64), AID), 201);
-    const activated = await ok(enroll(plain.token, { hostname: 'r3b', agentId: other.agentId, fingerprint: 'f'.repeat(64) }), 201);
+    // N1: a bulk / multi-use token never activates a clone
+    const bulk = await request('POST', '/api/agent/enroll', {
+      as: null, body: { token: plain.token, hostname: 'r3b', agentId: other.agentId, fingerprint: 'f'.repeat(64) }
+    });
+    assert.equal(bulk.status, 409);
+    assert.equal((await models.DeviceModel.findByPk(other.deviceId))?.clonePendingApproval, true);
+
+    // Only a single-use activation token an admin made for THIS clone does
+    assert.equal((await request('POST', `/api/devices/${other.deviceId}/activation-token`, { as: 'siteadmin' })).status, 403);
+    const activation = await ok(request('POST', `/api/devices/${other.deviceId}/activation-token`), 201);
+    // It cannot enrol any other machine
+    const misuse = await request('POST', '/api/agent/enroll', { as: null, body: { token: activation.token, hostname: 'elsewhere' } });
+    assert.equal(misuse.status, 401);
+    const activated = await ok(enroll(activation.token, { hostname: 'r3b', agentId: other.agentId, fingerprint: 'f'.repeat(64) }), 201);
     assert.equal(activated.deviceId, other.deviceId);
     assert.equal((await models.DeviceModel.findByPk(other.deviceId))?.clonePendingApproval, false);
+    // The use is consumed: a second activation with it fails
+    const enrolment = await models.DeviceEnrollmentModel.findByPk(activation.enrollmentId);
+    assert.equal(enrolment?.uses, 1);
+    assert.notEqual(
+      (await request('POST', '/api/agent/enroll', { as: null, body: { token: activation.token, hostname: 'r3b', agentId: other.agentId, fingerprint: 'f'.repeat(64) } })).status,
+      201
+    );
+    const [activatedAudit] = await db.sequelize.query(`SELECT metadata FROM audit_logs WHERE target = :t AND action = 'device.clone_activated'`, {
+      replacements: { t: `device:${other.deviceId}` }
+    });
+    assert.match(String((activatedAudit as any[])[0]?.metadata), new RegExp(`enrollmentId\\\\?":${activation.enrollmentId}`));
     // The source was never touched
     const src = await models.DeviceModel.findByPk(source.deviceId);
     assert.equal(src?.fingerprint, FP_A);
@@ -459,10 +483,30 @@ describe('clone identity', { skip }, () => {
     const b = await ok(enroll(plain.token, { hostname: 'r6b', agentId: '13131313-1111-4111-8111-131313131313' }, '10.66.0.2'), 201);
     const c = await ok(enroll(plain.token, { hostname: 'r6c', agentId: '14141414-1111-4111-8111-141414141414' }, '10.66.0.3'), 201);
 
-    // Inside the 7-day window (migration just ran): any address is fine
+    // Inside the 7-day window (migration just ran): a new address still gets
+    // access, but N3: the binding is flagged for review all the same
     assert.ok([200, 204].includes((await poll(a.token, `fingerprint=${FP_A}`, '10.99.0.1')).status));
     let row = await models.DeviceModel.findByPk(a.deviceId);
     assert.equal(row?.fingerprint, FP_A);
+    assert.equal(row?.fingerprintPendingReview, true);
+
+    // N3: admins resolve it; approve keeps the binding, reset clears it; both audited
+    assert.equal((await request('POST', `/api/devices/${a.deviceId}/fingerprint-review`, { as: 'siteadmin', body: { action: 'approve' } })).status, 403);
+    assert.equal((await request('POST', `/api/devices/${a.deviceId}/fingerprint-review`, { body: { action: 'nope' } })).status, 400);
+    await ok(request('POST', `/api/devices/${a.deviceId}/fingerprint-review`, { body: { action: 'approve' } }));
+    row = await models.DeviceModel.findByPk(a.deviceId);
+    assert.equal(row?.fingerprintPendingReview, false);
+    assert.equal(row?.fingerprint, FP_A);
+    await ok(request('POST', `/api/devices/${a.deviceId}/fingerprint-review`, { body: { action: 'reset' } }));
+    row = await models.DeviceModel.findByPk(a.deviceId);
+    assert.equal(row?.fingerprint, null);
+    const [reviews] = await db.sequelize.query(`SELECT action FROM audit_logs WHERE target = :t AND action LIKE 'device.fingerprint_review_%' ORDER BY id`, {
+      replacements: { t: `device:${a.deviceId}` }
+    });
+    assert.deepEqual((reviews as any[]).map(r => r.action), ['device.fingerprint_review_approved', 'device.fingerprint_review_reset']);
+    // From its last address the next poll binds again, trusted
+    assert.ok([200, 204].includes((await poll(a.token, `fingerprint=${FP_A}`, '10.99.0.1')).status));
+    row = await models.DeviceModel.findByPk(a.deviceId);
     assert.equal(row?.fingerprintPendingReview, false);
 
     // Window closed
@@ -494,5 +538,43 @@ describe('clone identity', { skip }, () => {
         replacements: { v: new Date().toISOString() }
       });
     }
+  });
+
+  test('N2: revoking a source revokes its pending clones; approved ones only on request; no activation after', async () => {
+    const plain = await ok(createToken({ siteId: office.id, maxUses: null }), 201);
+    const AID = '15151515-1111-4111-8111-151515151515';
+    const source = await ok(enroll(plain.token, { hostname: 'n2', agentId: AID, fingerprint: FP_A }), 201);
+    const pending = await ok(cloneEnroll(source.token, '1'.repeat(64), AID), 201);
+    const approved = await ok(cloneEnroll(source.token, '2'.repeat(64), AID), 201);
+    const waiting = await ok(cloneEnroll(source.token, '3'.repeat(64), AID), 201);
+    await ok(request('POST', `/api/devices/${approved.deviceId}/approve-clone`));
+    // An activation token made before the revoke
+    const activation = await ok(request('POST', `/api/devices/${waiting.deviceId}/activation-token`), 201);
+
+    const revoked = await ok(request('DELETE', `/api/devices/${source.deviceId}`));
+    assert.deepEqual(revoked.revokedClones.sort(), [pending.deviceId, waiting.deviceId].sort());
+    assert.ok((await models.DeviceModel.findByPk(pending.deviceId))?.revokedAt);
+    assert.equal((await models.DeviceModel.findByPk(approved.deviceId))?.revokedAt, null, 'approved clones keep access by default');
+    // The pre-made activation token no longer works
+    assert.notEqual((await request('POST', '/api/agent/enroll', { as: null, body: { token: activation.token, hostname: 'n2', agentId: waiting.agentId, fingerprint: '3'.repeat(64) } })).status, 201);
+    const [cascade] = await db.sequelize.query(`SELECT action FROM audit_logs WHERE target = :t AND action = 'device.clone_cascade_revoked'`, {
+      replacements: { t: `device:${source.deviceId}` }
+    });
+    assert.equal((cascade as any[]).length, 1);
+
+    // 'Revoke clones too' takes approved clones with it
+    const AID2 = '16161616-1111-4111-8111-161616161616';
+    const source2 = await ok(enroll(plain.token, { hostname: 'n2b', agentId: AID2, fingerprint: FP_A }), 201);
+    const approved2 = await ok(cloneEnroll(source2.token, '4'.repeat(64), AID2), 201);
+    await ok(request('POST', `/api/devices/${approved2.deviceId}/approve-clone`));
+    const pending2 = await ok(cloneEnroll(source2.token, '5'.repeat(64), AID2), 201);
+    // Approval is refused once the source is revoked
+    await db.sequelize.query(`UPDATE devices SET "revokedAt" = NOW() WHERE id = :id`, { replacements: { id: source2.deviceId } });
+    assert.equal((await request('POST', `/api/devices/${pending2.deviceId}/approve-clone`)).status, 409);
+    assert.equal((await request('POST', `/api/devices/${pending2.deviceId}/activation-token`)).status, 409);
+    await db.sequelize.query(`UPDATE devices SET "revokedAt" = NULL WHERE id = :id`, { replacements: { id: source2.deviceId } });
+    const all = await ok(request('DELETE', `/api/devices/${source2.deviceId}`, { body: { revokeClones: true } }));
+    assert.deepEqual(all.revokedClones.sort(), [approved2.deviceId, pending2.deviceId].sort());
+    assert.ok((await models.DeviceModel.findByPk(approved2.deviceId))?.revokedAt);
   });
 });

@@ -100,7 +100,7 @@ export const importExampleRunbook = asyncWrapper(
               docs: item.docs || '',
               collection: item.collection,
               fileName: item.fileName || '',
-              variables: cleanVariableDefinitions(item.variables || []),
+              variables: cleanVariableDefinitions(item.variables || []).map(({ raw: _raw, ...def }) => def),
               isPinned: 0
             },
             { transaction }

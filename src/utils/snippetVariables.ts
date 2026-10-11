@@ -19,6 +19,8 @@ export interface VariableDefinition {
   choices?: string[];
   /** secret-ref only: the name of a saved (encrypted) variable. Never a value. */
   ref?: string;
+  /** Insert the value as written instead of quoted. Only admins can set it. */
+  raw?: boolean;
 }
 
 export const MAX_VARIABLE_DEFS = 50;
@@ -53,7 +55,8 @@ export const cleanVariableDefinitions = (input: unknown): VariableDefinition[] =
       type,
       default: type === 'secret-ref' ? '' : text(raw?.default, 2000),
       required: Boolean(raw?.required),
-      description: text(raw?.description, 500).trim()
+      description: text(raw?.description, 500).trim(),
+      ...(raw?.raw === true && type !== 'secret-ref' ? { raw: true } : {})
     };
     if (type === 'choice') {
       const choices = (Array.isArray(raw?.choices) ? raw.choices : String(raw?.choices || '').split(','))
@@ -160,3 +163,14 @@ export const cleanStepValues = (input: unknown): Record<string, string> => {
   return out;
 };
 
+
+/** Names of definitions an admin marked raw (inserted unquoted) */
+export const rawNames = (input: unknown): string[] => {
+  let list: unknown = input;
+  try {
+    if (typeof input === 'string') list = JSON.parse(input);
+  } catch {
+    list = [];
+  }
+  return Array.isArray(list) ? list.filter((def: any) => def && def.raw === true && typeof def.name === 'string').map((def: any) => def.name) : [];
+};

@@ -14,6 +14,13 @@ const walk = dir =>
     return statSync(path).isDirectory() ? walk(path) : name.endsWith('.test.js') ? [path] : [];
   });
 
+// The database-backed suites skip themselves without TEST_DATABASE_URL, so a
+// CI run without it would look green while testing almost nothing
+if (process.env.CI && !/test/i.test(process.env.TEST_DATABASE_URL || '')) {
+  console.error('CI needs TEST_DATABASE_URL pointing at a throwaway database whose name contains "test".');
+  process.exit(1);
+}
+
 const files = (process.argv.length > 2 ? process.argv.slice(2) : walk(root)).sort();
 if (!files.length) {
   console.error(`No test files found under ${root}`);

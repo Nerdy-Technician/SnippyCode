@@ -9,6 +9,11 @@ import assert from 'node:assert/strict';
 import http from 'http';
 import { AddressInfo } from 'net';
 import * as vars from '../src/utils/snippetVariables';
+import * as templates from '../src/utils/templateVars';
+import { spawnSync } from 'child_process';
+import { existsSync } from 'fs';
+import { homedir } from 'os';
+import { join as joinPath } from 'path';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL || '';
 const skip = TEST_DATABASE_URL ? false : 'TEST_DATABASE_URL is not set, skipping snippet variable tests';
@@ -86,6 +91,49 @@ describe('snippet variables', { skip }, () => {
   };
   const runOn = (snippetId: number, variables: Record<string, string>) =>
     request('POST', `/api/snippets/${snippetId}/run`, { body: { siteId: site.id, deviceIds: [device.id], variables } });
+
+  const PAYLOADS = [
+    "a'; touch /tmp/snippycode-pwned; echo '",
+    '$(touch /tmp/snippycode-pwned)',
+    '`touch /tmp/snippycode-pwned`',
+    'x"; Remove-Item -Recurse C:\\; "',
+    "x'; Remove-Item C:\\ ; '",
+    'it\u2019s; whoami',
+    '$env:PATH; ${HOME}',
+    'line1\nrm -rf /',
+    'back\\slash \\" end',
+    '\u2028 and \u2029'
+  ];
+
+  test('MED3: every payload is inserted as one literal (bash, PowerShell, Python, Node)', () => {
+    const run = (cmd: string, args: string[]) => spawnSync(cmd, args, { encoding: 'utf8' });
+    const pwsh = ['pwsh', joinPath(homedir(), '.local/pwsh/pwsh')].find(bin => bin === 'pwsh' ? run('pwsh', ['-v']).status === 0 : existsSync(bin));
+    for (const payload of PAYLOADS) {
+      const bash = run('bash', ['-c', `printf %s ${templates.quoteForLanguage(payload, 'bash')}`]);
+      assert.equal(bash.stdout, payload, `bash: ${payload}`);
+      const py = run('python3', ['-c', `import sys; sys.stdout.write(${templates.quoteForLanguage(payload, 'python')})`]);
+      if (py.status !== null && !py.error) assert.equal(py.stdout, payload, `python: ${payload}`);
+      const node = run(process.execPath, ['-e', `process.stdout.write(${templates.quoteForLanguage(payload, 'javascript')})`]);
+      assert.equal(node.stdout, payload, `node: ${payload}`);
+      if (pwsh) {
+        const ps = run(pwsh, ['-NoProfile', '-NonInteractive', '-Command', `[Console]::Out.Write(${templates.quoteForLanguage(payload, 'powershell')})`]);
+        assert.equal(ps.stdout, payload, `powershell: ${payload}`);
+      }
+    }
+    assert.equal(existsSync('/tmp/snippycode-pwned'), false);
+    // Batch has no safe quoting: metacharacters are refused
+    assert.throws(() => templates.quoteForLanguage('a & del *', 'batch'), templates.TemplateValueError);
+    assert.equal(templates.quoteForLanguage('plain value', 'batch'), '"plain value"');
+    // Languages SnippyCode does not run get the value as written
+    assert.equal(templates.quoteForLanguage("it's", 'markdown'), "it's");
+  });
+
+  test('MED3: typed values are checked before quoting; raw is an explicit opt-out', () => {
+    const check = (name: string, value: string) => (name === 'N' && !/^\d+$/.test(value) ? 'must be a number' : null);
+    assert.equal(templates.renderTemplateSafe('x {{N}}', { language: 'bash', check }, { N: '5' }), "x '5'");
+    assert.throws(() => templates.renderTemplateSafe('x {{N}}', { language: 'bash', check }, { N: '5; reboot' }), /N must be a number/);
+    assert.equal(templates.renderTemplateSafe('ls {{FLAGS}}', { language: 'bash', raw: ['FLAGS'] }, { FLAGS: '-la -h' }), 'ls -la -h');
+  });
 
   test('definitions are validated and normalised', () => {
     const cleaned = vars.cleanVariableDefinitions(defs);
@@ -182,7 +230,7 @@ describe('snippet variables', { skip }, () => {
     res = await runOn(snippet.id, { PATH_TO_CLEAN: '/tmp', DRY_RUN: 'no', API_TOKEN: 'typed-in' });
     assert.equal(res.status, 202, res.text);
     assert.equal(await models.AgentJobModel.count(), before + 1);
-    assert.equal(await lastJobCode(), 'find /tmp -mtime +7 # false safe s3cr3t-value\n', 'defaults, booleans and the secret reference');
+    assert.equal(await lastJobCode(), "find '/tmp' -mtime +'7' # 'false' 'safe' 's3cr3t-value'\n", 'defaults, booleans and the secret reference');
   });
 
   test('a missing secret reference blocks the run', async () => {
@@ -198,7 +246,7 @@ describe('snippet variables', { skip }, () => {
     const old = await ok(request('POST', '/api/snippets', { body: { title: 'Old', language: 'bash', code: 'echo {{WHO:world}} {{UNSET}}\n' } }), 201);
     assert.deepEqual(old.variables, []);
     await ok(runOn(old.id, {}), 202);
-    assert.equal(await lastJobCode(), 'echo world {{UNSET}}\n');
+    assert.equal(await lastJobCode(), "echo 'world' {{UNSET}}\n");
   });
 
   test('schedules store values and refuse to save without required ones', async () => {
@@ -216,7 +264,7 @@ describe('snippet variables', { skip }, () => {
 
     const scheduler = await import('../src/utils/scheduler');
     await scheduler.startScheduleRun((await models.ScheduleModel.findByPk(saved.id))!, 'manual');
-    assert.equal(await lastJobCode(), 'find /var/tmp -mtime +7 # true safe s3cr3t-value\n');
+    assert.equal(await lastJobCode(), "find '/var/tmp' -mtime +'7' # 'true' 'safe' 's3cr3t-value'\n");
   });
 
   test('runbook steps set or pass through values', async () => {
@@ -232,7 +280,7 @@ describe('snippet variables', { skip }, () => {
     const automation = await import('../src/utils/automation');
     const row = await models.RunbookRunModel.findByPk(run.id);
     await automation.executeRunbookStep(row!, fetched.steps[0].id, {});
-    assert.equal(await lastJobCode(), 'find /srv/share -mtime +30 # true safe s3cr3t-value\n');
+    assert.equal(await lastJobCode(), "find '/srv/share' -mtime +'30' # 'true' 'safe' 's3cr3t-value'\n");
   });
 
   test('import sources list saved variables by name only', async () => {
@@ -251,5 +299,40 @@ describe('snippet variables', { skip }, () => {
     assert.deepEqual(sync.canonicalSnippet({ title: 'x', variables: 'garbage' }).variables, [], 'bad remote data is dropped');
     const runbook = sync.canonicalRunbook({ title: 'r', steps: [{ title: 's', values: { A: '1', bad: '2' } }] });
     assert.deepEqual((runbook.steps as any[])[0].values, { A: '1' });
+  });
+
+  test('MED3: run values, site values and step values are quoted; raw needs an admin', async () => {
+    // A run value carrying an injection stays one argument
+    const echo = await ok(request('POST', '/api/snippets', {
+      body: { title: 'Echo', language: 'bash', code: 'echo {{MSG}}\n', variables: [{ name: 'MSG', type: 'string', required: true }] }
+    }), 201);
+    await ok(runOn(echo.id, { MSG: "hi'; rm -rf / #" }), 202);
+    assert.equal(await lastJobCode(), "echo 'hi'\\''; rm -rf / #'\n");
+
+    // A saved site value that does not fit a number definition is refused
+    await ok(request('POST', '/api/variables', { body: { name: 'BAD_DAYS', value: '7; reboot', siteId: site.id } }), 201);
+    const typed = await ok(request('POST', '/api/snippets', {
+      body: { title: 'Typed', language: 'bash', code: 'sleep {{BAD_DAYS}}\n', variables: [{ name: 'BAD_DAYS', type: 'number' }] }
+    }), 201);
+    const refused = await runOn(typed.id, {});
+    assert.equal(refused.status, 400);
+    assert.match(refused.text, /BAD_DAYS must be a number/);
+
+    // Raw: editors cannot set it; owners can, and the value goes in as written
+    const editor = await ok(request('POST', '/api/admin/users', { body: { email: 'med3-ed@example.test', displayName: 'Ed', password: 'editor-password-123', role: 'editor' } }), 201);
+    assert.ok(editor);
+    const login = await request('POST', '/api/auth/login', { body: { email: 'med3-ed@example.test', password: 'editor-password-123' }, as: null });
+    cookies.editor = String(login.headers['set-cookie']?.[0] || '').split(';')[0];
+    const rawDefs = [{ name: 'FLAGS', type: 'string', raw: true, default: '-la' }];
+    assert.equal((await request('POST', '/api/snippets', { body: { title: 'Raw', language: 'bash', code: 'ls {{FLAGS}}\n', variables: rawDefs }, as: 'editor' })).status, 403);
+    const raw = await ok(request('POST', '/api/snippets', { body: { title: 'Raw', language: 'bash', code: 'ls {{FLAGS}}\n', variables: rawDefs } }), 201);
+    assert.equal(raw.variables[0].raw, true);
+    await ok(runOn(raw.id, { FLAGS: '-la -h' }), 202);
+    assert.equal(await lastJobCode(), 'ls -la -h\n');
+    // An editor changing the code drops the raw flag
+    const edited = await ok(request('PUT', `/api/snippets/${raw.id}`, {
+      body: { title: 'Raw', language: 'bash', code: 'ls {{FLAGS}} /tmp\n', description: '', variables: rawDefs }, as: 'editor'
+    }));
+    assert.equal(edited.variables[0].raw, undefined);
   });
 });

@@ -501,6 +501,21 @@ export const updateDeviceTags = asyncWrapper(
   }
 );
 
+const expireDeviceJobs = async (deviceId: number) => {
+  const pending = await AgentJobModel.findAll({
+    where: { deviceId, status: { [Op.in]: ['queued', 'running'] } }
+  });
+  for (const job of pending) {
+    await finishAgentJob(job, {
+      exitCode: null,
+      stdout: '',
+      stderr: 'The device was revoked before it reported a result.',
+      durationMs: 0,
+      status: 'expired'
+    });
+  }
+};
+
 /**
  * @description Revoke a device; its agent can no longer connect (admins)
  * @route /api/devices/:id
@@ -515,17 +530,23 @@ export const revokeDevice = asyncWrapper(
     }
 
     await device.update({ revokedAt: new Date(), tokenHash: `revoked:${device.tokenHash}` });
-    const pending = await AgentJobModel.findAll({
-      where: { deviceId: device.id, status: { [Op.in]: ['queued', 'running'] } }
-    });
+    await expireDeviceJobs(device.id);
 
-    for (const job of pending) {
-      await finishAgentJob(job, {
-        exitCode: null,
-        stdout: '',
-        stderr: 'The device was revoked before it reported a result.',
-        durationMs: 0,
-        status: 'expired'
+    // Clones of a revoked device: pending ones always go with it; approved
+    // ones only when asked (body or ?revokeClones=true), e.g. a compromise
+    const revokeApproved = req.body?.revokeClones === true || req.query.revokeClones === 'true';
+    const clones = await DeviceModel.findAll({
+      where: { clonedFrom: device.id, revokedAt: null, ...(revokeApproved ? {} : { clonePendingApproval: true }) }
+    });
+    for (const clone of clones) {
+      await clone.update({ revokedAt: new Date(), tokenHash: `revoked:${clone.tokenHash}`, clonePendingApproval: false });
+      await expireDeviceJobs(clone.id);
+    }
+    if (clones.length) {
+      await auditLog('device.clone_cascade_revoked', {
+        ...auditActor(req),
+        target: `device:${device.id}`,
+        metadata: { clones: clones.map(clone => clone.id), approvedIncluded: revokeApproved }
       });
     }
 
@@ -535,7 +556,7 @@ export const revokeDevice = asyncWrapper(
       metadata: { name: device.name, siteId: device.siteId }
     });
 
-    res.status(200).json({ data: {} });
+    res.status(200).json({ data: { revokedClones: clones.map(clone => clone.id) } });
   }
 );
 
@@ -777,13 +798,33 @@ export const enrollDevice = asyncWrapper(
       // otherwise take over any device whose machine ID it knows. Only tokens
       // an admin created with allowReenrol may rotate it, and re-enrolment
       // never uses up the token.
-      // A fresh enrolment token for the same site activates a pending clone
-      const activatesClone = Boolean(existing?.clonePendingApproval && existing.siteId === enrollment.siteId);
+      // A clone activation token belongs to one pending clone and nothing else
+      if (enrollment.forDeviceId && existing?.id !== enrollment.forDeviceId) {
+        return null;
+      }
+      // Only a single-use activation token made for this clone activates it
+      // (or an admin approval); bulk and multi-use tokens never do, and
+      // nothing activates a clone whose source has been revoked
+      const activatesClone = Boolean(
+        existing?.clonePendingApproval &&
+          enrollment.forDeviceId === existing.id &&
+          enrollment.maxUses === 1 &&
+          existing.siteId === enrollment.siteId
+      );
+      if (existing?.clonePendingApproval && !activatesClone) {
+        return { refused: true as const, enrollment, deviceId: existing.id };
+      }
+      if (activatesClone && existing!.clonedFrom) {
+        const source = await DeviceModel.findByPk(existing!.clonedFrom, { transaction });
+        if (!source || source.revokedAt) {
+          return { refused: true as const, enrollment, deviceId: existing!.id, sourceRevoked: true };
+        }
+      }
       if (existing && !enrollment.allowReenrol && !activatesClone) {
         return { refused: true as const, enrollment, deviceId: existing.id };
       }
 
-      if (existing) {
+      if (existing && !activatesClone) {
         await enrollment.update({ lastUsedAt: new Date() }, { transaction });
       } else {
         // Conditional increment: max uses can never be exceeded, even if two
@@ -839,12 +880,21 @@ export const enrollDevice = asyncWrapper(
         enrollment,
         reused: Boolean(existing),
         duplicates,
-        clonedFrom
+        clonedFrom,
+        activatedClone: activatesClone
       };
     });
 
+    if (result && !result.refused && result.activatedClone) {
+      await auditLog('device.clone_activated', {
+        ipAddress: ip,
+        target: `device:${result.device.id}`,
+        metadata: { enrollmentId: result.enrollment.id, tokenPrefix: result.enrollment.tokenPrefix, clonedFrom: result.device.clonedFrom }
+      });
+    }
+
     if (result?.refused) {
-      await auditLog('device.reenrol_refused', {
+      await auditLog('sourceRevoked' in result && result.sourceRevoked ? 'device.clone_activation_refused' : 'device.reenrol_refused', {
         ipAddress: ip,
         target: `device:${result.deviceId}`,
         metadata: {
@@ -992,7 +1042,12 @@ export const checkFingerprint = async (
   const fingerprint = cleanFingerprint(value);
   if (!device.fingerprint) {
     if (!fingerprint) return 'ok';
-    const trusted = (Boolean(ip) && ip === device.lastIp) || (await bindingWindowOpen());
+    // Only the device's last known address is trusted. Inside the 7-day
+    // window after migration 25 the agent still gets access, but a binding
+    // from anywhere else is flagged for review all the same
+    const sameIp = Boolean(ip) && ip === device.lastIp;
+    const windowOpen = sameIp ? false : await bindingWindowOpen();
+    const trusted = sameIp;
     // Only bind if nobody else did in the meantime
     const [, bound] = await sequelize.query(
       `UPDATE devices SET fingerprint = :fingerprint, "fingerprintPendingReview" = :review, "updatedAt" = NOW()
@@ -1006,7 +1061,7 @@ export const checkFingerprint = async (
     await auditLog(trusted ? 'device.fingerprint_bound' : 'device.fingerprint_pending_review', {
       ipAddress: ip || undefined,
       target: `device:${device.id}`,
-      metadata: { lastIp: device.lastIp, trusted }
+      metadata: { lastIp: device.lastIp, trusted, bindingWindow: windowOpen }
     });
     if (!trusted) {
       emitEvent({
@@ -1261,6 +1316,15 @@ export const approveClone = asyncWrapper(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
     const device = await findCloneForDecision(req, next);
     if (!device) return;
+    const source = device.clonedFrom ? await DeviceModel.findByPk(device.clonedFrom) : null;
+    if (device.clonedFrom && (!source || source.revokedAt)) {
+      await auditLog('device.clone_activation_refused', {
+        ...auditActor(req),
+        target: `device:${device.id}`,
+        metadata: { reason: 'source_revoked', clonedFrom: device.clonedFrom }
+      });
+      return next(new ErrorResponse(409, 'The device this was cloned from is revoked, so the clone cannot be approved'));
+    }
     await device.update({ clonePendingApproval: false });
     await auditLog('device.clone_approved', {
       ...auditActor(req),
@@ -1874,5 +1938,68 @@ export const getJobFile = asyncWrapper(
     }
 
     res.status(200).json({ data: job.tool === 'files' ? { entries: JSON.parse(content) } : { content } });
+  }
+);
+
+/**
+ * @description Create a single-use activation token for one pending clone
+ * (admins). Only this token, or an approval, activates the clone.
+ * @route /api/devices/:id/activation-token
+ * @request POST
+ */
+export const createCloneActivationToken = asyncWrapper(
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+    const device = await findCloneForDecision(req, next);
+    if (!device) return;
+    const source = device.clonedFrom ? await DeviceModel.findByPk(device.clonedFrom) : null;
+    if (device.clonedFrom && (!source || source.revokedAt)) {
+      return next(new ErrorResponse(409, 'The device this was cloned from is revoked, so the clone cannot be activated'));
+    }
+    const token = await newToken('enroll');
+    const enrollment = await DeviceEnrollmentModel.create({
+      siteId: device.siteId,
+      tokenHash: token.hash,
+      tokenPrefix: token.prefix,
+      expiresAt: new Date(Date.now() + 24 * 3_600_000),
+      maxUses: 1,
+      createdBy: req.user?.id || null,
+      label: `Activate clone ${device.name}`.slice(0, 120),
+      forDeviceId: device.id
+    });
+    await auditLog('device.clone_activation_token_created', {
+      ...auditActor(req),
+      target: `device:${device.id}`,
+      metadata: { enrollmentId: enrollment.id, tokenPrefix: enrollment.tokenPrefix, expiresAt: enrollment.expiresAt }
+    });
+    res.status(201).json({ data: { token: token.token, expiresAt: enrollment.expiresAt, enrollmentId: enrollment.id } });
+  }
+);
+
+/**
+ * @description Resolve a fingerprint review (admins): approve keeps the
+ * bound fingerprint; reset clears it so the next poll binds again.
+ * @route /api/devices/:id/fingerprint-review
+ * @request POST
+ */
+export const reviewDeviceFingerprint = asyncWrapper(
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+    if (!isAdminRole(req.user?.role)) {
+      return next(new ErrorResponse(403, 'Only admins can review fingerprints'));
+    }
+    const device = await DeviceModel.findOne({ where: { id: Number(req.params.id) || -1, revokedAt: null } });
+    if (!device) return next(new ErrorResponse(404, 'Device was not found'));
+    const action = req.body?.action;
+    if (action !== 'approve' && action !== 'reset') {
+      return next(new ErrorResponse(400, 'action must be approve or reset'));
+    }
+    await device.update(
+      action === 'approve' ? { fingerprintPendingReview: false } : { fingerprintPendingReview: false, fingerprint: null }
+    );
+    await auditLog(`device.fingerprint_review_${action === 'approve' ? 'approved' : 'reset'}`, {
+      ...auditActor(req),
+      target: `device:${device.id}`,
+      metadata: { name: device.name }
+    });
+    res.status(200).json({ data: deviceJson(device) });
   }
 );

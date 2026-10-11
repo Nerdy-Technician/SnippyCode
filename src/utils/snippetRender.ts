@@ -1,9 +1,9 @@
 import { SnippetRunModel, SnippetRunInstance } from '../models';
-import { findTemplateVariables, renderTemplate } from './templateVars';
+import { findTemplateVariables, renderTemplateSafe, TemplateValueError } from './templateVars';
 import { loadVariableLayers } from './variableValues';
 import { maskSecrets } from './secretBox';
 import { runSnippetCode } from './runSnippet';
-import { applyDefinitions, missingRequired, VariableDefinition } from './snippetVariables';
+import { applyDefinitions, missingRequired, typeError, VariableDefinition } from './snippetVariables';
 
 export interface RenderedSnippet {
   code: string;
@@ -34,6 +34,8 @@ export const renderSnippetFor = async (options: {
   includeSecrets: boolean;
   /** The snippet's variable definitions: types, defaults, required, references */
   definitions?: VariableDefinition[];
+  /** The snippet's language: values are quoted for it (see renderTemplateSafe) */
+  language?: string | null;
 }): Promise<RenderedSnippet> => {
   const layers = await loadVariableLayers({
     userId: options.userId,
@@ -66,7 +68,31 @@ export const renderSnippetFor = async (options: {
   Object.entries(applied.aliases).forEach(([name, ref]) => {
     if (merged[ref] !== undefined) referenced[name] = merged[ref];
   });
-  const code = renderTemplate(options.code, referenced, explicit, merged, applied.defaults);
+  // Every value is type-checked and inserted as one quoted literal for the
+  // language, unless an admin marked its definition raw
+  const byName = new Map(definitions.map(def => [def.name, def]));
+  let code = options.code;
+  const renderErrors: string[] = [];
+  try {
+    code = renderTemplateSafe(
+      options.code,
+      {
+        language: options.language,
+        raw: definitions.filter(def => def.raw).map(def => def.name),
+        check: (name, value) => {
+          const def = byName.get(name);
+          return def ? typeError(def, value) : null;
+        }
+      },
+      referenced,
+      explicit,
+      merged,
+      applied.defaults
+    );
+  } catch (err) {
+    if (!(err instanceof TemplateValueError)) throw err;
+    renderErrors.push(err.message);
+  }
   const used = findTemplateVariables(options.code).map(variable => variable.name);
   const usedRefs = used.map(name => applied.aliases[name] || name);
   const secretsUsed = layers.secretNames.filter(
@@ -79,7 +105,7 @@ export const renderSnippetFor = async (options: {
     secretValues: layers.secretValues,
     secretsUsed,
     missing: unresolved,
-    errors: applied.errors,
+    errors: [...applied.errors, ...renderErrors],
     missingRequired: missingRequired(definitions, unresolved)
   };
 };

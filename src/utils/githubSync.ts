@@ -160,7 +160,8 @@ export const canonicalSnippet = (raw: any): Canonical => ({
 /** Definitions in the sync file; anything invalid is dropped rather than failing the run */
 const safeDefinitions = (input: unknown) => {
   try {
-    return cleanVariableDefinitions(input);
+    // Raw (unquoted) is an admin decision made in SnippetCode, never imported
+    return cleanVariableDefinitions(input).map(({ raw: _raw, ...def }) => def);
   } catch {
     return [];
   }

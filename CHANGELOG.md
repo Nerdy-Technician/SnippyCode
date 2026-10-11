@@ -26,8 +26,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Stored schedule values are encrypted at rest with `VARIABLES_SECRET_KEY`.
 - Server tests run on Node 20 (no shell glob needed).
 
+### Security
+- Schedules: editing, deleting, running or reading the values of a schedule needs access to every site and device it currently targets (others get 404, audited); new targets are checked on save; runs reach only the sites both the creator and the last editor can access; a schedule nobody owns does not run; shared device tags across sites are admin-only.
+- Placeholder values are type-checked and quoted for the snippet's language (POSIX shell, PowerShell, Python/JavaScript; batch metacharacters refused). Admins can mark a variable raw.
+- Clones are activated only by an admin approval or a single-use activation token made for that clone; revoking a device revokes its pending clones (and approved ones on request); approval and activation are refused once the source is revoked.
+- Fingerprint bindings from an unexpected address are flagged for review, also during the first 7 days; admins can approve or reset the binding.
+- The agent bootstrap window can no longer be re-armed past 30 days from first use.
+- Approval payloads are encrypted with `enc:v2` bound to their row.
+- Production requires `VARIABLES_SECRET_KEY` and no longer falls back to `SESSION_SECRET`.
+- A schedule run whose approval went stale is closed as failed.
+
 ### Migrations
-- 18 to 25: device schedules, GitHub auto-sync, run approvals, snippet variables, shared tags, agent identity, agent auto-update, clone identity and schedule value encryption.
+- 18 to 26: device schedules, GitHub auto-sync, run approvals, snippet variables, shared tags, agent identity, agent auto-update, clone identity and schedule value encryption, clone activation tokens.
 
 ## [1.2.2] - 2026-10-11
 

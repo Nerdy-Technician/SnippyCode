@@ -156,10 +156,12 @@ export interface DeviceEnrollment extends Stamps {
   revokedBy: number | null;
   /** Admin-only: may rotate the token of a machine that is already enrolled */
   allowReenrol: boolean;
+  /** Single-use clone activation token for this pending clone only */
+  forDeviceId: number | null;
 }
 
 export interface DeviceEnrollmentInstance
-  extends Model<DeviceEnrollment, Optional<DeviceEnrollment, 'id' | 'createdAt' | 'updatedAt' | 'uses' | 'label' | 'lastUsedAt' | 'revokedAt' | 'revokedBy' | 'allowReenrol'>>,
+  extends Model<DeviceEnrollment, Optional<DeviceEnrollment, 'id' | 'createdAt' | 'updatedAt' | 'uses' | 'label' | 'lastUsedAt' | 'revokedAt' | 'revokedBy' | 'allowReenrol' | 'forDeviceId'>>,
     DeviceEnrollment {}
 
 export const DeviceEnrollmentModel = sequelize.define<DeviceEnrollmentInstance>(
@@ -178,6 +180,7 @@ export const DeviceEnrollmentModel = sequelize.define<DeviceEnrollmentInstance>(
     revokedAt: { type: DATE, allowNull: true },
     revokedBy: { type: INTEGER, allowNull: true },
     allowReenrol: { type: BOOLEAN, allowNull: false, defaultValue: false },
+    forDeviceId: { type: INTEGER, allowNull: true },
     ...stamps
   },
   { tableName: 'device_enrollments' }

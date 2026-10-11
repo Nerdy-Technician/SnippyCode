@@ -15,8 +15,9 @@ Release version: `v1.2.3`
 
 ## Upgrading to v1.2.3
 
-- Back up the database first (`npm run backup` or the admin UI). Migrations 18 to 25 run on start.
-- `VARIABLES_SECRET_KEY` is required in production (the server falls back to `SESSION_SECRET` but a dedicated key is strongly recommended, and must not change after upgrade). Existing schedule values are encrypted on upgrade.
+- Back up the database first (`npm run backup` or the admin UI). Migrations 18 to 26 run on start.
+- `VARIABLES_SECRET_KEY` is required in production; the server refuses to start without it and no longer falls back to `SESSION_SECRET`. If you relied on the fallback, set `VARIABLES_SECRET_KEY` to your current `SESSION_SECRET` value so existing secrets stay readable. Existing schedule values are encrypted on upgrade.
+- Placeholder values are now quoted for the snippet's language; drop quotes written around placeholders (`"{{NAME}}"` becomes `{{NAME}}`). See `docs/upgrading-v1.2.3.md`.
 - Agent auto-update needs a release signing key: generate it offline with `scripts/agent-release.js`, set `AGENT_UPDATE_PUBLIC_KEYS` on the server and keep the private key off the server. See `docs/agent-updates.md`.
 - Rollback: restore the pre-upgrade backup and redeploy the v1.2.2 image; migrations are not reversed automatically.
 

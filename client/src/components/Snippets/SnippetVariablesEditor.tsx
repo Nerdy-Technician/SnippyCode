@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
+import { AuthContext } from '../../store';
+import { hasMinimumRole } from '../../utils/roles';
 import axios from 'axios';
 import {
   VARIABLE_TYPES,
@@ -33,6 +35,8 @@ const TYPE_LABELS: { [type in VariableType]: string } = {
 };
 
 export const SnippetVariablesEditor = ({ code, value, onChange, snippetId }: Props): JSX.Element => {
+  const { user } = useContext(AuthContext);
+  const isAdmin = hasMinimumRole(user?.role, 'admin');
   const [importMode, setImportMode] = useState<'' | 'json' | 'snippet' | 'saved'>('');
   const [json, setJson] = useState('');
   const [importError, setImportError] = useState('');
@@ -275,6 +279,22 @@ export const SnippetVariablesEditor = ({ code, value, onChange, snippetId }: Pro
                       checked={def.required}
                       onChange={e => update(index, { required: e.target.checked })}
                     />
+                    {def.type !== 'secret-ref' && (isAdmin || def.raw) && (
+                      <label
+                        className='form-check-label small ms-2'
+                        title='Values are quoted for the language by default. Raw inserts them as written (admins only).'
+                      >
+                        <input
+                          type='checkbox'
+                          className='form-check-input me-1'
+                          aria-label='Raw (unquoted)'
+                          checked={Boolean(def.raw)}
+                          disabled={!isAdmin}
+                          onChange={e => update(index, { raw: e.target.checked || undefined })}
+                        />
+                        raw
+                      </label>
+                    )}
                   </td>
                   <td>
                     <input

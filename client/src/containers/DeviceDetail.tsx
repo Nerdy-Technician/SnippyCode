@@ -1009,6 +1009,22 @@ export const DeviceDetail = (): JSX.Element => {
       .then(() => load())
       .catch(err => setCloneError(apiError(err, 'Could not update the clone.')));
   };
+  const [activationToken, setActivationToken] = useState<{ token: string; expiresAt: string } | null>(null);
+  const makeActivationToken = () => {
+    setCloneError('');
+    axios
+      .post(`/api/devices/${id}/activation-token`)
+      .then(res => setActivationToken(res.data.data))
+      .catch(err => setCloneError(apiError(err, 'Could not create an activation token.')));
+  };
+  const reviewFingerprint = (action: 'approve' | 'reset') => {
+    if (action === 'reset' && !window.confirm('Reset the fingerprint? The next poll binds it again (from the last known address it is trusted).')) return;
+    setCloneError('');
+    axios
+      .post(`/api/devices/${id}/fingerprint-review`, { action })
+      .then(() => load())
+      .catch(err => setCloneError(apiError(err, 'Could not update the fingerprint review.')));
+  };
   const [dialog, setDialog] = useState<'run' | null>(null);
   const tabParam = new URLSearchParams(location.search).get('tab') as Tab;
   const tab: Tab = (TABS as readonly string[]).includes(tabParam) ? tabParam : 'summary';
@@ -1127,7 +1143,26 @@ export const DeviceDetail = (): JSX.Element => {
                   <button type='button' className='btn btn-sm btn-outline-danger' onClick={() => decideClone('deny')}>
                     Deny clone
                   </button>
+                  <button type='button' className='btn btn-sm btn-outline-secondary' onClick={makeActivationToken} title='A single-use enrolment token that activates only this clone (24 hours)'>
+                    Activation token
+                  </button>
                 </>
+              )}
+              {device.fingerprintPendingReview && isAdmin && (
+                <>
+                  <button type='button' className='btn btn-sm btn-outline-success' onClick={() => reviewFingerprint('approve')}>
+                    Approve fingerprint
+                  </button>
+                  <button type='button' className='btn btn-sm btn-outline-secondary' onClick={() => reviewFingerprint('reset')}>
+                    Reset fingerprint
+                  </button>
+                </>
+              )}
+              {activationToken && (
+                <span className='small'>
+                  Single-use token (shown once, expires {new Date(activationToken.expiresAt).toLocaleString()}):{' '}
+                  <code className='mono'>{activationToken.token}</code>
+                </span>
               )}
               {cloneError && <span className='text-danger small'>{cloneError}</span>}
               {device.canAct && (

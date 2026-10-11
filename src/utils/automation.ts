@@ -372,6 +372,8 @@ const canServerRun = (language: string): boolean =>
  * Device steps finish later, when the agent reports back.
  */
 /** Replace only the placeholders a step sets; everything else is filled later as usual */
+const PASS_THROUGH = /^\{\{[A-Z][A-Z0-9_]{0,63}\}\}$/;
+
 const applyStepValues = (code: string, values: Record<string, string>): string =>
   Object.keys(values).length
     ? code.replace(/(\$?)\{\{([A-Z][A-Z0-9_]{0,63})(?::[^}\n]*)?\}\}/g, (whole, dollar, name) =>
@@ -411,12 +413,17 @@ export const executeRunbookStep = async (
   const stepValues = Object.fromEntries(
     Object.entries(step.values || {}).filter(([name]) => !(options.explicit && name in options.explicit))
   );
+  // A value that is just another placeholder passes it through; any other
+  // value is literal text and is quoted like every other value
+  const passThrough = Object.fromEntries(Object.entries(stepValues).filter(([, value]) => PASS_THROUGH.test(value)));
+  const literal = Object.fromEntries(Object.entries(stepValues).filter(([, value]) => !PASS_THROUGH.test(value)));
   const rendered = await renderSnippetFor({
-    code: applyStepValues(snippet.code, stepValues),
+    code: applyStepValues(snippet.code, passThrough),
+    language: snippet.language,
     definitions: snippet.variables,
     userId: options.userId,
     siteId: run.siteId,
-    explicit: options.explicit,
+    explicit: { ...literal, ...(options.explicit || {}) },
     deviceValues: device ? deviceVariableValues(device, site?.name) : undefined,
     includeSecrets: true
   });
