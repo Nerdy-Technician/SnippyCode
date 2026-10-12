@@ -57,7 +57,7 @@ describe('agent auto-update', { skip }, () => {
       if (options.bearer) headers.authorization = `Bearer ${options.bearer}`;
       if (options.fingerprint) headers['x-agent-fingerprint'] = options.fingerprint;
 
-      const req = http.request({ host: '127.0.0.1', port, method, path, headers }, res => {
+      const req = http.request({ host: '127.0.0.1', port, method, path, headers, agent: false }, res => {
         const chunks: Buffer[] = [];
         res.on('data', chunk => chunks.push(chunk));
         res.on('end', () => {

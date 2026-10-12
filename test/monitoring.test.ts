@@ -87,7 +87,7 @@ describe('alerts, policies and reports', { skip }, () => {
       if (options.token) headers.authorization = `Bearer ${options.token}`;
       else if (options.auth !== false && cookie) { headers.cookie = `${cookie}; XSRF-TOKEN=test-xsrf`; headers['x-xsrf-token'] = 'test-xsrf'; }
 
-      const req = http.request({ host: '127.0.0.1', port, method, path, headers }, res => {
+      const req = http.request({ host: '127.0.0.1', port, method, path, headers, agent: false }, res => {
         const chunks: Buffer[] = [];
         res.on('data', chunk => chunks.push(chunk));
         res.on('end', () => {

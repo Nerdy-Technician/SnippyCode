@@ -50,7 +50,7 @@ describe('clone rate limit race', { skip }, () => {
       if (options.bearer) headers.authorization = `Bearer ${options.bearer}`;
       Object.assign(headers, options.headers || {});
 
-      const req = http.request({ host: '127.0.0.1', port, method, path, headers }, res => {
+      const req = http.request({ host: '127.0.0.1', port, method, path, headers, agent: false }, res => {
         const chunks: Buffer[] = [];
         res.on('data', chunk => chunks.push(chunk));
         res.on('end', () => {

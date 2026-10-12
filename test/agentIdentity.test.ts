@@ -48,7 +48,7 @@ describe('agent identity', { skip }, () => {
       if (options.ip) headers['x-forwarded-for'] = options.ip;
       if (options.bearer) headers.authorization = `Bearer ${options.bearer}`;
 
-      const req = http.request({ host: '127.0.0.1', port, method, path, headers }, res => {
+      const req = http.request({ host: '127.0.0.1', port, method, path, headers, agent: false }, res => {
         const chunks: Buffer[] = [];
         res.on('data', chunk => chunks.push(chunk));
         res.on('end', () => {
