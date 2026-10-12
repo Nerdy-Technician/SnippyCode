@@ -4,6 +4,19 @@ All notable changes to SnippyCode are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.4] - 2026-10-12
+
+### Fixed
+- Runbooks page no longer crashes for editors and above: the example runbook panel read `GET /api/sites` as a bare list instead of `{ sites, canManage }`.
+
+### Security
+- Placeholders written inside quotes, backticks, `$( )`, `${ }`, heredocs, here-strings, triple-quoted strings or template literals are refused at save and at run time (values are already quoted), unless an admin marks the variable raw. Affected snippets show a warning and are listed in Admin > System, `GET /api/snippets/quoted-placeholders` and `node build/quotedPlaceholdersReport.js`.
+- Strict CSRF: every write on the session cookie must send the XSRF token, even without Origin or Sec-Fetch-Site. Agent and API-key requests are unchanged.
+- The Docker image runs as the unprivileged `node` user (uid 1000). Existing data volumes need a one-off `chown` (see upgrade notes).
+
+### Changed
+- `VARIABLES_SECRET_KEY` is documented in `.env.example` and the compose example fails fast with `${VARIABLES_SECRET_KEY:?}` when it is missing.
+
 ## [1.2.3] - 2026-10-11
 
 ### Added

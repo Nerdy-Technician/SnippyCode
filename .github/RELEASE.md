@@ -1,3 +1,24 @@
+# SnippyCode v1.2.4 Release Notes
+
+Release version: `v1.2.4`
+
+## Highlights
+
+- Fix: the Runbooks page no longer crashes (blank page) for editors, admins and owners.
+- Security: placeholders inside quotes or substitutions are refused at save and run time; affected snippets show a warning and are listed in Admin > System.
+- Security: strict CSRF token on every cookie-session write.
+- Security: the Docker image runs as the non-root `node` user.
+- `VARIABLES_SECRET_KEY` is in `.env.example`, and the compose example fails fast without it.
+
+## Upgrading to v1.2.4
+
+- Back up the database first (`docker exec <container> node build/backupCli.js create`). No new migrations.
+- The image now runs as uid 1000 (`node`). Give the existing data volume to that user once, before starting v1.2.4:
+  `docker compose run --rm --user root --entrypoint chown snippycode -R node:node /app/data`
+- Make sure `VARIABLES_SECRET_KEY` is set (keep your current value; changing it makes stored secrets unreadable). Using `${VARIABLES_SECRET_KEY:?}` in compose stops a start without it.
+- List snippets with quoted placeholders: `docker compose exec snippycode node build/quotedPlaceholdersReport.js`, then remove the quotes around those placeholders.
+- Rollback: redeploy the v1.2.3 image (no schema changes). Volume ownership can stay as is.
+
 # SnippyCode v1.2.3 Release Notes
 
 Release version: `v1.2.3`
