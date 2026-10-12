@@ -17,7 +17,11 @@ import {
 
 // Docs ship with the app (docs/ is copied into the image), so help works offline
 const docsDir = (): string => process.env.DOCS_DIR || join(process.cwd(), 'docs');
-const HELP_DOCS: { [slug: string]: string } = { playbooks: 'playbooks.md', runbooks: 'playbooks.md' };
+const HELP_DOCS: { [slug: string]: string } = {
+  playbooks: 'playbooks.md',
+  runbooks: 'playbooks.md',
+  variables: 'variables.md'
+};
 const EXAMPLE_FILE = 'examples/linux-disk-cleanup.runbook.json';
 const IMPORT_LOCK = 7_311_844;
 

@@ -193,7 +193,8 @@ describe('variables, secrets, sites, runs and runbooks', { skip }, () => {
       `SELECT value FROM variables WHERE name = 'API_TOKEN'`,
       { type: 'SELECT' }
     );
-    assert.match(row.value, /^enc:v1:/);
+    // Bound to its row with AAD since v1.3.0
+    assert.match(row.value, /^enc:v2:/);
     assert.ok(!row.value.includes(SECRET));
 
     const list = await ok(request('GET', '/api/variables', { as: 'viewer' }));
@@ -204,11 +205,13 @@ describe('variables, secrets, sites, runs and runbooks', { skip }, () => {
     assert.ok(!JSON.stringify(list).includes(SECRET));
   });
 
-  test('editors can reveal team secrets (audited); viewers cannot', async () => {
+  test('admins can reveal global secrets (audited); editors and viewers cannot', async () => {
     const list = await ok(request('GET', '/api/variables'));
     const id = list.team.find((item: any) => item.name === 'API_TOKEN').id;
 
-    assert.equal((await ok(request('GET', `/api/variables/${id}/reveal`, { as: 'editor' }))).value, SECRET);
+    // Global variables are admin-only since v1.3.0
+    assert.equal((await request('GET', `/api/variables/${id}/reveal`, { as: 'editor' })).status, 403);
+    assert.equal((await ok(request('GET', `/api/variables/${id}/reveal`))).value, SECRET);
     assert.equal((await request('GET', `/api/variables/${id}/reveal`, { as: 'viewer' })).status, 403);
 
     const [audit] = await db.sequelize.query(

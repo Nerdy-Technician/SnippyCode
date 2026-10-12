@@ -1,3 +1,19 @@
+# SnippyCode v1.3.0 Release Notes
+
+Release version: `v1.3.0`
+
+## Highlights
+
+- Variables redesign: Global (admin-only), Site and User scopes with one clear override order: snippet default, global, site, device, user, runtime prompt.
+- New tabbed Variables page with "Used in" lists and in-app help, and a resolved-values preview in the snippet editor (pick a site or device, see each value and where it came from).
+- Secrets stay masked everywhere and are now encrypted bound to their row.
+
+## Upgrading to v1.3.0
+
+- Migration 27 runs automatically at startup, in one transaction. It re-encrypts existing secret variables bound to their row, so `VARIABLES_SECRET_KEY` must be set (it already is if you followed the v1.2.4 notes). If it cannot read a secret, it changes nothing and startup stops: fix the key and restart.
+- Behaviour change: only admins and owners can change or reveal Global (formerly "team") variables. Editors who managed team values need an admin, or should move those values to Site scope.
+- Rollback: redeploy the v1.2.5 image. Bound secrets need v1.3.0 to read them, so restore the pre-upgrade backup if you roll back.
+
 # SnippyCode v1.2.5 Release Notes
 
 Release version: `v1.2.5`

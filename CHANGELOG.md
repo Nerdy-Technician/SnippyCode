@@ -4,6 +4,22 @@ All notable changes to SnippyCode are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-10-12
+
+### Added
+- Variables redesign: **Global** (admin-only), **Site** and **User** scopes. Values resolve as snippet default, then global, site, device, user, then the runtime prompt.
+- Tabbed Variables page (Global / Site / User) with a site picker, per-variable "Used in" lists (snippets, runbooks, schedules) and in-app help (`docs/variables.md`, `/api/help/variables`).
+- Resolved preview in the snippet editor: pick a site or device and see each value and the scope it came from (`GET /api/variables/preview`). Secrets stay masked.
+- `GET /api/variables/usage`.
+
+### Changed
+- Global (formerly "team") variables can only be created, changed, revealed or deleted by admins and owners; editors keep site variables for sites they can access. The API accepts the old `team` / `personal` scope names and still returns `team`, `personal` and `canEditTeam` alongside `global`, `user` and `canEditGlobal`.
+- Scheduled snippets resolve the schedule owner's user values, as scheduled runbooks already did.
+
+### Security
+- Secret variable values are encrypted bound to their row (AES-GCM AAD `variables:<id>:value`), so a ciphertext copied to another row fails to decrypt. Portable backups decrypt and re-bind them.
+- Migration 27 (one transaction, safe to re-run) re-encrypts existing secrets bound to their row, clears `siteId` on rows that also had a `userId` (they were always treated as user values) and adds a one-scope-per-row check constraint.
+
 ## [1.2.5] - 2026-10-12
 
 ### Changed

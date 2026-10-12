@@ -6618,3 +6618,44 @@ td.tool-sub {
   background: rgba(220, 70, 60, 0.16);
   color: #b3261e;
 }
+
+// Variables redesign (v1.3.0)
+.variables-tabs {
+  margin-bottom: 0.25rem;
+}
+
+.variable-used-in {
+  summary {
+    cursor: pointer;
+  }
+
+  ul {
+    margin: 0.35rem 0 0;
+    padding-left: 1.1rem;
+    font-size: 0.875rem;
+  }
+}
+
+.variables-order li {
+  padding: 0.15rem 0;
+}
+
+.resolved-preview .table td {
+  vertical-align: middle;
+}
+
+.snippet-variable-source {
+  &.is-user,
+  &.is-prompt {
+    color: var(--bs-success, #198754);
+  }
+
+  &.is-global,
+  &.is-device {
+    color: var(--bs-info, #0dcaf0);
+  }
+
+  &.is-missing {
+    color: var(--bs-danger, #dc3545);
+  }
+}
