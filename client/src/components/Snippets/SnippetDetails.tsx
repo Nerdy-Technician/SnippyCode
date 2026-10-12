@@ -54,6 +54,7 @@ export const SnippetDetails = (props: Props): JSX.Element => {
     fileName,
     isPublic,
     dangerous,
+    quotedPlaceholders,
     usage,
     personal
   } = props.snippet;
@@ -280,6 +281,14 @@ export const SnippetDetails = (props: Props): JSX.Element => {
         <span>Visibility</span>
         <span className='fw-bold'>{isPublic ? 'Public' : 'Private'}</span>
       </div>
+
+      {quotedPlaceholders && quotedPlaceholders.length > 0 && (
+        <div className='alert alert-warning small' role='alert'>
+          <strong>This snippet will not run until it is fixed.</strong> Values are quoted automatically, so remove
+          the quotes around:{' '}
+          {quotedPlaceholders.map(p => `{{${p.name}}} (line ${p.line}, inside ${p.context})`).join('; ')}.
+        </div>
+      )}
 
       <div className='metric-row'>
         <DangerousToggle endpoint={`/api/snippets/${id}/dangerous`} value={Boolean(dangerous)} />
