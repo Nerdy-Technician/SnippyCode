@@ -4,6 +4,15 @@ All notable changes to SnippyCode are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.5] - 2026-10-12
+
+### Changed
+- Typography and spacing pass: a full system font stack after Inter (`system-ui`, Segoe UI, Roboto, Helvetica, Arial, sans-serif), 16px body text with a 1.5 line height, 15px buttons, inputs and menus, and a 13px floor for badges, labels and meta text (was as small as 11px).
+- Shared spacing scale (`--sb-space-1` to `--sb-space-6`) and text sizes (`--sb-text-xs/sm/md`) as theme variables, with roomier table cells, card bodies and headers, and vertically centred table rows.
+
+### Fixed
+- Includes the v1.2.4 Runbooks crash fix (`GET /api/sites` read as `{ sites, canManage }` or a bare list), covered by client tests.
+
 ## [1.2.4] - 2026-10-12
 
 ### Fixed
