@@ -1,3 +1,18 @@
+# SnippyCode v1.2.5 Release Notes
+
+Release version: `v1.2.5`
+
+## Highlights
+
+- UI: cleaner, roomier typography and spacing. Inter with a full system font fallback, 16px body text at a 1.5 line height, larger buttons, inputs and small labels, and more padding in tables and cards. Brand colours and themes are unchanged.
+- Includes everything in v1.2.4: the Runbooks page crash fix, refused quoted placeholders, strict CSRF and the non-root image.
+
+## Upgrading to v1.2.5
+
+- No new migrations and no configuration changes. Pull the new image and restart.
+- Coming from v1.2.3 or older, follow the v1.2.4 steps below first (data volume `chown` to uid 1000 and `VARIABLES_SECRET_KEY`).
+- Rollback: redeploy the v1.2.4 image.
+
 # SnippyCode v1.2.4 Release Notes
 
 Release version: `v1.2.4`
