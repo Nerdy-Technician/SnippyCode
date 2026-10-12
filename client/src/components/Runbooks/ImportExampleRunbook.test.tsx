@@ -3,7 +3,7 @@ import { act } from 'react-dom/test-utils';
 import { createRoot, Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import axios from 'axios';
-import { ImportExampleRunbook } from './ImportExampleRunbook';
+import { ImportExampleRunbook, siteList } from './ImportExampleRunbook';
 
 jest.mock('axios');
 const mocked = axios as jest.Mocked<typeof axios>;
@@ -45,7 +45,7 @@ describe('ImportExampleRunbook', () => {
   });
 
   beforeEach(() => {
-    mocked.get.mockResolvedValue({ data: { data: [{ id: 1, name: 'Office' }, { id: 2, name: 'Lab' }] } });
+    mocked.get.mockResolvedValue({ data: { data: { sites: [{ id: 1, name: 'Office' }, { id: 2, name: 'Lab' }], canManage: true } } });
   });
 
   afterEach(() => {
@@ -90,5 +90,33 @@ describe('ImportExampleRunbook', () => {
     await act(async () => button().click());
     await flush();
     expect(container.querySelector('.alert-danger')).not.toBeNull();
+  });
+
+  it('reads the real GET /api/sites shape ({ sites, canManage }) and preselects a lone site', async () => {
+    mocked.get.mockResolvedValue({ data: { data: { sites: [{ id: 7, name: 'Only' }], canManage: false } } });
+    await mount();
+    expect(container.querySelectorAll('option')).toHaveLength(2);
+    expect((container.querySelector('select') as HTMLSelectElement).value).toBe('7');
+  });
+
+  it('renders (with no sites) instead of crashing on an unexpected answer', async () => {
+    for (const data of [{}, null, { sites: null }, 'oops']) {
+      mocked.get.mockResolvedValue({ data: { data } });
+      await mount();
+      expect(container.querySelector('select')).not.toBeNull();
+      expect(container.querySelectorAll('option')).toHaveLength(1);
+      act(() => root.unmount());
+      container.remove();
+    }
+    await mount();
+  });
+});
+
+describe('siteList', () => {
+  it('accepts { sites } or a bare list, and anything else is empty', () => {
+    expect(siteList({ sites: [{ id: 1, name: 'A' }] })).toEqual([{ id: 1, name: 'A' }]);
+    expect(siteList([{ id: 2, name: 'B' }])).toEqual([{ id: 2, name: 'B' }]);
+    expect(siteList(undefined)).toEqual([]);
+    expect(siteList({ sites: 'x' } as any)).toEqual([]);
   });
 });

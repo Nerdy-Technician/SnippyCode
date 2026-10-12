@@ -9,6 +9,14 @@ interface SiteOption {
   name: string;
 }
 
+// GET /api/sites answers { sites, canManage }; accept a bare list too
+type SitesResponse = { sites?: SiteOption[] } | SiteOption[] | null | undefined;
+
+export const siteList = (data: SitesResponse): SiteOption[] => {
+  const list = Array.isArray(data) ? data : data?.sites;
+  return Array.isArray(list) ? list : [];
+};
+
 interface ImportResult {
   runbookId: number;
   created: { snippets: number; runbook: boolean; variables: number };
@@ -27,11 +35,12 @@ export const ImportExampleRunbook = ({ onImported }: Props): JSX.Element => {
 
   useEffect(() => {
     axios
-      .get<{ data: SiteOption[] }>('/api/sites')
+      .get<{ data: SitesResponse }>('/api/sites')
       .then(res => {
-        setSites(res.data.data);
-        if (res.data.data.length === 1) {
-          setSiteId(String(res.data.data[0].id));
+        const list = siteList(res.data?.data);
+        setSites(list);
+        if (list.length === 1) {
+          setSiteId(String(list[0].id));
         }
       })
       .catch(() => setSites([]));
