@@ -14,7 +14,16 @@ import {
   VariableList
 } from '../typescript/interfaces';
 
-const emptyVariables: VariableList = { team: [], personal: [], site: [], canEditTeam: false };
+const emptyVariables: VariableList = {
+  global: [],
+  user: [],
+  site: [],
+  canEditGlobal: false,
+  canEditSite: false,
+  team: [],
+  personal: [],
+  canEditTeam: false
+};
 const SITE_STORAGE_KEY = 'snippycode:selectedSite';
 
 // The chosen site is a per-browser convenience; storage may be unavailable

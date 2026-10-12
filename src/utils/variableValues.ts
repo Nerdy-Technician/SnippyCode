@@ -1,11 +1,24 @@
 import { Op, WhereOptions } from 'sequelize';
 import { VariableModel } from '../models';
-import { decryptSecret } from './secretBox';
+import { decryptSecret, encryptSecret, isBoundSecret } from './secretBox';
+
+export type VariableOrigin = 'global' | 'site' | 'user';
+
+/** AAD for a saved variable's value: a ciphertext copied to another row fails */
+export const variableAad = (id: number): string => `variables:${id}:value`;
+
+/** Encrypt a variable value bound to its row (empty stays empty) */
+export const encryptVariableValue = (id: number, plain: string): string =>
+  plain === '' ? '' : encryptSecret(plain, variableAad(id));
+
+/** Decrypt a stored variable value; legacy enc:v1 values are still readable */
+export const decryptVariableValue = (row: { id: number; value: string }): string =>
+  isBoundSecret(row.value) ? decryptSecret(row.value, variableAad(row.id)) : decryptSecret(row.value);
 
 type Values = Record<string, string>;
 
 export interface VariableLayers {
-  /** Resolved saved values (personal, then site, then team) */
+  /** Resolved saved values (user, then site, then global) */
   sources: Values[];
   /** Plain-text secret values, for masking output */
   secretValues: string[];
@@ -15,6 +28,8 @@ export interface VariableLayers {
   secretNames: string[];
   /** Names the user set a personal value for */
   personalNames: string[];
+  /** Which scope each resolved name came from */
+  origins: Record<string, VariableOrigin>;
 }
 
 /**
@@ -65,7 +80,7 @@ export const loadVariableLayers = async (options: {
     }
 
     try {
-      const plain = decryptSecret(row.value);
+      const plain = decryptVariableValue(row);
       target.set(row.name, plain);
       secretValues.push(plain);
       secretKeys.add(`${target === personal ? 'p' : target === site ? 's' : 't'}:${row.name}`);
@@ -80,12 +95,16 @@ export const loadVariableLayers = async (options: {
   const values: Values = {};
   const withheld: string[] = [];
   const secretNames: string[] = [];
+  const origins: Record<string, VariableOrigin> = {};
+  const originOf = { p: 'user', s: 'site', t: 'global' } as const;
 
   ([['p', personal], ['s', site], ['t', team]] as const).forEach(([key, layer]) => {
     layer.forEach((value, name) => {
       if (name in values) {
         return;
       }
+
+      origins[name] = originOf[key];
 
       if (value === WITHHELD) {
         values[name] = `{{${name}}}`;
@@ -105,6 +124,7 @@ export const loadVariableLayers = async (options: {
     secretValues,
     withheld,
     secretNames,
-    personalNames: Array.from(personal.keys())
+    personalNames: Array.from(personal.keys()),
+    origins
   };
 };

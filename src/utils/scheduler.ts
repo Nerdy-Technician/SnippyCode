@@ -305,6 +305,8 @@ export const startScheduleRun = async (
           code: snippet.code,
           language: snippet.language,
           definitions: snippet.variables,
+          // Same resolution as runbooks: the schedule owner's user values apply
+          userId: owner,
           siteId: device.siteId,
           deviceValues: deviceVariableValues(device, site?.name),
           explicit: decryptScheduleVariables(schedule.variables, schedule.id),
@@ -359,6 +361,7 @@ export const startScheduleRun = async (
             code: snippet.code,
             language: snippet.language,
             definitions: snippet.variables,
+            userId: owner,
             siteId: site?.id || null,
             explicit: decryptScheduleVariables(schedule.variables, schedule.id),
             includeSecrets: true

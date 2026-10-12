@@ -16,7 +16,7 @@ import { gunzipSync, gzipSync } from 'zlib';
 import { QueryTypes } from 'sequelize';
 import { sequelize } from '../db';
 import { SettingModel } from '../models';
-import { decryptSecret, encryptSecret, isEncryptedSecret } from './secretBox';
+import { decryptSecret, encryptSecret, isBoundSecret, isEncryptedSecret } from './secretBox';
 import { emitEvent } from './notify';
 import { Logger } from './Logger';
 
@@ -112,7 +112,7 @@ const SERVER_ENCRYPTED: { [table: string]: (row: Record<string, unknown>) => str
 
 const convertSecrets = (
   tables: BackupPayload['tables'],
-  convert: (value: string) => string
+  convert: (value: string, aad?: string) => string
 ): void => {
   Object.entries(SERVER_ENCRYPTED).forEach(([table, fieldsFor]) => {
     (tables[table] || []).forEach(row => {
@@ -120,7 +120,8 @@ const convertSecrets = (
         const value = row[field];
 
         if (typeof value === 'string' && value !== '') {
-          row[field] = convert(value);
+          // Saved variables are bound to their row (see variableAad)
+          row[field] = convert(value, table === 'variables' ? `variables:${row.id}:value` : undefined);
         }
       });
     });
@@ -162,7 +163,9 @@ export const createBackupData = async (
 
   if (passphrase) {
     // Inside the passphrase encryption, secrets travel in plain text
-    convertSecrets(tables, value => (isEncryptedSecret(value) ? decryptSecret(value) : value));
+    convertSecrets(tables, (value, aad) =>
+      isEncryptedSecret(value) ? decryptSecret(value, isBoundSecret(value) ? aad : undefined) : value
+    );
   }
 
   const meta: BackupPayload['meta'] = {
@@ -268,7 +271,7 @@ export const restoreBackupData = async (
   const restored: { [table: string]: number } = {};
 
   if (payload.meta.secretsPortable) {
-    convertSecrets(payload.tables, value => (isEncryptedSecret(value) ? value : encryptSecret(value)));
+    convertSecrets(payload.tables, (value, aad) => (isEncryptedSecret(value) ? value : encryptSecret(value, aad)));
   }
 
   // Point avatars at this server's avatar folder

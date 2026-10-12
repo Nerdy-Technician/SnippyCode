@@ -7,6 +7,7 @@ import {
   useEffect,
   useRef
 } from 'react';
+import { ResolvedPreview } from '../Variables/ResolvedPreview';
 import { SnippetVariablesEditor } from './SnippetVariablesEditor';
 import { definitionProblems } from '../../utils/snippetVariables';
 import Editor from '@monaco-editor/react';
@@ -955,6 +956,11 @@ export const SnippetForm = (props: Props): JSX.Element => {
                 snippetId={inEdit ? currentSnippet?.id : undefined}
                 onChange={variables => setFormData(current => ({ ...current, variables }))}
               />
+
+              <details className='mt-3'>
+                <summary className='form-label'>Resolved values</summary>
+                <ResolvedPreview snippetId={inEdit ? currentSnippet?.id : undefined} code={currentSnippet?.code || ''} />
+              </details>
 
               <hr />
 
