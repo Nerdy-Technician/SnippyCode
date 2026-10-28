@@ -101,6 +101,31 @@ describe('device tool scripts', () => {
     assert.ok(!code.includes('$(id)'), 'nothing from the file appears as shell');
   });
 
+  test('one-shot shell is the command itself, with stdin left to the agent', () => {
+    assert.equal(buildToolScript('shell', 'linux', { code: 'echo hi', shell: 'bash' }).code, 'echo hi');
+    assert.equal(buildToolScript('shell', 'linux', { code: 'echo hi', shell: 'bash' }).language, 'bash');
+    assert.equal(buildToolScript('shell', 'windows', { code: 'Get-Date', shell: 'powershell' }).code, 'Get-Date');
+    assert.equal(buildToolScript('shell', 'windows', { code: 'dir', shell: 'cmd' }).language, 'bat');
+  });
+
+  test('terminal mode keeps the exit code and refuses a cmd folder that can break out', () => {
+    const bash = buildToolScript('shell', 'linux', { code: 'echo hi', shell: 'bash', terminal: true, cwd: "/tmp/a'b" });
+    assert.match(bash.code, /cd -- '\/tmp\/a'\\''b'/);
+    assert.match(bash.code, /__rc=\$\?/);
+    assert.match(bash.code, /exit \$__rc/);
+    assert.equal(bash.language, 'bash');
+
+    const powershell = buildToolScript('shell', 'windows', { code: 'Get-Date', shell: 'powershell', terminal: true, cwd: 'C:\\Tools' });
+    assert.match(powershell.code, /\$LASTEXITCODE = \$null/);
+    assert.match(powershell.code, /exit \$__rc/);
+    assert.match(powershell.code, /Set-Location -LiteralPath 'C:\\Tools'/);
+
+    assert.throws(() => buildToolScript('shell', 'windows', { code: 'dir', shell: 'cmd', terminal: true, cwd: 'C:\\temp & calc' }));
+    const cmd = buildToolScript('shell', 'windows', { code: 'dir', shell: 'cmd', terminal: true, cwd: 'C:\\temp' });
+    assert.match(cmd.code, /cd \/d "C:\\temp"/);
+    assert.match(cmd.code, /exit \/b %__RC%/);
+  });
+
   test('names are validated or quoted', () => {
     assert.throws(() => buildToolScript('service', 'linux', { name: 'nginx; rm -rf /', action: 'restart' }));
     assert.throws(() => buildToolScript('service', 'linux', { name: 'nginx', action: 'explode' }));

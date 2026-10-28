@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { AgentJobState } from '../../typescript/interfaces';
+import { InteractiveTerminal } from './InteractiveTerminal';
+import { versionAtLeast } from '../../utils/terminalText';
 
 const CWD_MARKER = '__SNIPPYCODE_CWD__';
 
 type RunTool = (tool: string, args?: Record<string, unknown>, key?: string) => Promise<AgentJobState | null>;
 
 interface Entry {
+  id: string;
   cwd: string;
   command: string;
   output: string;
@@ -23,7 +26,42 @@ const splitCwd = (stdout: string): { output: string; cwd: string | null } => {
   return { output: stdout.slice(0, index).replace(/\s+$/, ''), cwd: cwd || null };
 };
 
-export const TerminalTab = (props: { name: string; windows: boolean; online: boolean; runTool: RunTool; busy: boolean }) => {
+export const TerminalTab = (props: {
+  deviceId: number;
+  name: string;
+  windows: boolean;
+  online: boolean;
+  capabilities: string[];
+  agentVersion: string;
+  suggestedUsers: string[];
+  runTool: RunTool;
+  busy: boolean;
+}) => {
+  if ((props.capabilities || []).includes('pty')) {
+    return (
+      <InteractiveTerminal
+        deviceId={props.deviceId}
+        name={props.name}
+        windows={props.windows}
+        online={props.online}
+        suggestedUsers={props.suggestedUsers}
+        runTool={props.runTool}
+      />
+    );
+  }
+
+  return <OneShotTerminal {...props} />;
+};
+
+/** One command at a time. Stdin is closed; used when the agent has no pty capability. */
+const OneShotTerminal = (props: {
+  name: string;
+  windows: boolean;
+  online: boolean;
+  agentVersion: string;
+  runTool: RunTool;
+  busy: boolean;
+}) => {
   const shells = props.windows ? ['powershell', 'cmd'] : ['bash'];
   const [shell, setShell] = useState(shells[0]);
   const [cwd, setCwd] = useState(props.windows ? 'C:\\' : '/');
@@ -40,7 +78,7 @@ export const TerminalTab = (props: { name: string; windows: boolean; online: boo
   }, [entries]);
 
   const prompt = (folder: string) =>
-    props.windows ? (shell === 'cmd' ? `${folder}>` : `PS ${folder}>`) : `root@${props.name}:${folder}#`;
+    props.windows ? (shell === 'cmd' ? `${folder}>` : `PS ${folder}>`) : `agent@${props.name}:${folder}#`;
 
   const run = async () => {
     const command = input.trim();
@@ -57,7 +95,8 @@ export const TerminalTab = (props: { name: string; windows: boolean; online: boo
 
     const started = Date.now();
     const at = cwd;
-    setEntries(current => [...current, { cwd: at, command, output: '', error: '', exit: null, status: 'running' } as Entry].slice(-200));
+    const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setEntries(current => [...current, { id, cwd: at, command, output: '', error: '', exit: null, status: 'running' } as Entry].slice(-200));
 
     const job = await props.runTool('shell', { code: command, shell, terminal: true, cwd: at }, 'terminal');
     const run = job?.run;
@@ -66,7 +105,7 @@ export const TerminalTab = (props: { name: string; windows: boolean; online: boo
 
     setEntries(current =>
       current.map(entry =>
-        entry.status === 'running' && entry.command === command && entry.cwd === at
+        entry.id === id
           ? {
               ...entry,
               output,
@@ -111,7 +150,11 @@ export const TerminalTab = (props: { name: string; windows: boolean; online: boo
           </div>
         )}
         <span className='form-text'>
-          Runs as {props.windows ? 'SYSTEM' : 'root'} on {props.name}. Every command is kept in the audit log.
+          Runs as the agent account on {props.name} (usually {props.windows ? 'SYSTEM' : 'root'}). Every command is kept in the audit
+          log.
+          {versionAtLeast(props.agentVersion, '1.5.0')
+            ? ' Interactive prompts need python3 on this device.'
+            : ' Update the agent to 1.5.0 for interactive prompts and choosing an OS user.'}
         </span>
       </div>
 
@@ -120,7 +163,8 @@ export const TerminalTab = (props: { name: string; windows: boolean; online: boo
           <div className='terminal-hint'>
             Commands run one at a time through the agent, in the folder shown in the prompt; <code>cd</code> carries over between
             commands. Programs that wait for keyboard input (editors, <code>top</code>, password prompts) will not work, variables
-            you set do not carry over, and each command stops after two minutes. ↑/↓ recall earlier commands; Ctrl+L clears.
+            you set do not carry over, and each command stops when the agent run timeout is reached. ↑/↓ recall earlier commands;
+            Ctrl+L clears.
           </div>
         )}
         {entries.map((entry, index) => (

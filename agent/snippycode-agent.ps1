@@ -6,7 +6,7 @@
   running as SYSTEM; settings live in C:\ProgramData\SnippyCode\agent.json.
 #>
 $ErrorActionPreference = 'Stop'
-$AgentVersion = '1.4.0'
+$AgentVersion = '1.5.0'
 # Ed25519 public keys (base64 DER, space-separated), filled in when a release
 # is signed. Kept for parity with the Linux agent; see Update-Agent.
 $AgentUpdatePublicKeys = ''
@@ -105,7 +105,8 @@ function Invoke-Reenrol {
 }
 
 function Get-Capabilities {
-  $found = @('powershell', 'cmd')
+  # pty: interactive stdin for the terminal. One-shot jobs stay -NonInteractive.
+  $found = @('powershell', 'cmd', 'pty')
   foreach ($bin in 'pwsh', 'python', 'node', 'bash') {
     if (Get-Command $bin -ErrorAction SilentlyContinue) { $found += $bin }
   }
@@ -232,6 +233,213 @@ function Invoke-Job($Id, [string]$Language, [int]$TimeoutMs, [string]$Code) {
   Write-Log "Job $Id ($Language) finished with exit code $exitCode"
 }
 
+# Interactive terminal. Not a ConPTY: programs that require a real console can
+# still refuse, but Read-Host and other stdin prompts work. One-shot jobs do
+# not come through here, and Windows cannot switch OS users without a password.
+$script:LivePty = $null
+
+function Join-PtyBytes($Chunks) {
+  $len = 0
+  foreach ($chunk in $Chunks) { if ($chunk) { $len += $chunk.Length } }
+  $all = New-Object byte[] $len
+  $offset = 0
+  foreach ($chunk in $Chunks) {
+    if (-not $chunk -or $chunk.Length -eq 0) { continue }
+    [Array]::Copy($chunk, 0, $all, $offset, $chunk.Length)
+    $offset += $chunk.Length
+  }
+  return $all
+}
+
+function Read-PtyChunk($Stream, [byte[]]$Buffer, $Task) {
+  $result = @{ Eof = $false; Data = (New-Object byte[] 0); Task = $Task }
+  if (-not $result.Task) {
+    $result.Task = $Stream.ReadAsync($Buffer, 0, $Buffer.Length)
+    return $result
+  }
+  if (-not $result.Task.IsCompleted) { return $result }
+  $count = [int]$result.Task.Result
+  if ($count -le 0) {
+    $result.Eof = $true
+    $result.Task = $null
+    return $result
+  }
+  $copy = New-Object byte[] $count
+  [Array]::Copy($Buffer, $copy, $count)
+  $result.Data = $copy
+  $result.Task = $Stream.ReadAsync($Buffer, 0, $Buffer.Length)
+  return $result
+}
+
+function Send-PtyResult($Id, $ExitCode, $Stdout, $Stderr, $Duration) {
+  $body = @{ exitCode = $ExitCode; stdout = $Stdout; stderr = $Stderr; durationMs = $Duration; timedOut = $false } | ConvertTo-Json -Compress
+  $bytes = [Text.Encoding]::UTF8.GetBytes($body)
+  foreach ($attempt in 1..5) {
+    try {
+      Invoke-RestMethod -Method Post -Uri "$Url/api/agent/jobs/$Id/result" -Headers $Headers `
+        -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec 60 | Out-Null
+      return
+    } catch {
+      Write-Log "Could not send the result of terminal job $Id (attempt $attempt): $($_.Exception.Message)"
+      Start-Sleep -Seconds ($attempt * 5)
+    }
+  }
+}
+
+function Send-PtyExchange($Id, [byte[]]$Output, [bool]$Alive, $ExitCode, [string]$Message) {
+  $b64 = ''
+  if ($Output -and $Output.Length -gt 0) { $b64 = [Convert]::ToBase64String($Output) }
+  $body = @{
+    output = $b64; user = [string]$env:USERNAME; alive = $Alive; privileged = $false; tty = $false
+    exitCode = $ExitCode; message = $Message
+  } | ConvertTo-Json -Compress
+  $bytes = [Text.Encoding]::UTF8.GetBytes($body)
+  return Invoke-RestMethod -Method Post -Uri "$Url/api/agent/jobs/$Id/tty?wait=0.4" -Headers $Headers `
+    -ContentType 'application/json; charset=utf-8' -Body $bytes -TimeoutSec 30
+}
+
+function Stop-PtyProcess($State) {
+  if (-not $State -or -not $State.Process) { return }
+  try {
+    if (-not $State.Process.HasExited) {
+      & taskkill.exe /T /F /PID $State.Process.Id | Out-Null
+      $State.Process.WaitForExit()
+    }
+  } catch { }
+}
+
+function Complete-PtySession([string]$Message, $ExitCode, [byte[]]$Output) {
+  $state = $script:LivePty
+  $script:LivePty = $null
+  if (-not $state) { return }
+  Stop-PtyProcess $state
+  $final = if ($Output) { $Output } else { New-Object byte[] 0 }
+  try { Send-PtyExchange $state.Id $final $false $ExitCode $Message | Out-Null } catch { }
+  $stdout = "Interactive terminal ($($state.Shell)) as $env:USERNAME."
+  Send-PtyResult $state.Id $ExitCode $stdout $Message ([int]((Get-Date) - $state.Started).TotalMilliseconds)
+  Write-Log "Terminal job $($state.Id) finished with exit code $ExitCode"
+}
+
+function Start-PtySession($Id, [string]$Spec) {
+  if ($script:LivePty) { Complete-PtySession 'Replaced by a new terminal session.' 0 }
+  $shell = 'powershell'
+  $user = ''
+  foreach ($line in ($Spec -split "`r?`n")) {
+    if ($line -match '^shell=(.*)$') { $shell = $Matches[1].Trim() }
+    elseif ($line -match '^user=(.*)$') { $user = $Matches[1].Trim() }
+  }
+  if ($shell -ne 'cmd') { $shell = 'powershell' }
+  $account = [string]$env:USERNAME
+  if ($user -and $user -ne $account) {
+    $message = "SnippyCode: Windows agents run as the service account ($account) and cannot switch to $user without a password."
+    try { Send-PtyExchange $Id ([Text.Encoding]::UTF8.GetBytes("$message`r`n")) $false 1 $message | Out-Null } catch { }
+    Send-PtyResult $Id 1 '' $message 0
+    return
+  }
+
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  if ($shell -eq 'cmd') {
+    $psi.FileName = 'cmd.exe'
+    $psi.Arguments = '/q /k'
+  } else {
+    $psi.FileName = 'powershell.exe'
+    # Not -NonInteractive: this session has to answer Read-Host and y/n prompts.
+    $psi.Arguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -Command -'
+  }
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardInput = $true
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.CreateNoWindow = $true
+  $psi.WorkingDirectory = "$($env:SystemDrive)\"
+  $process = New-Object System.Diagnostics.Process
+  $process.StartInfo = $psi
+  [void]$process.Start()
+
+  $script:LivePty = @{
+    Id = $Id
+    Process = $process
+    Shell = $shell
+    Started = Get-Date
+    LastIo = Get-Date
+    Failures = 0
+    OutBuf = New-Object byte[] 8192
+    ErrBuf = New-Object byte[] 4096
+    OutTask = $null
+    ErrTask = $null
+    Note = [Text.Encoding]::UTF8.GetBytes("SnippyCode terminal ($shell, account $account). Keystrokes go to this shell. This is not a full Windows console.`r`n")
+  }
+  Write-Log "Interactive terminal job $Id started ($shell as $account)"
+}
+
+function Sync-PtySession {
+  $state = $script:LivePty
+  if (-not $state) { return }
+  try {
+    $now = Get-Date
+    if (($now - $state.Started).TotalHours -ge 4) {
+      Complete-PtySession 'The session reached the 4 hour limit.' 0
+      return
+    }
+    if (($now - $state.LastIo).TotalMinutes -ge 15) {
+      Complete-PtySession 'The session was closed after 15 minutes with nothing typed and no output.' 0
+      return
+    }
+    if ($state.Failures -ge 8) {
+      Complete-PtySession 'The session lost contact with SnippyCode.' 1
+      return
+    }
+
+    $chunks = @()
+    if ($state.Note) { $chunks += ,$state.Note; $state.Note = $null }
+    $stdout = Read-PtyChunk $state.Process.StandardOutput.BaseStream $state.OutBuf $state.OutTask
+    $stderr = Read-PtyChunk $state.Process.StandardError.BaseStream $state.ErrBuf $state.ErrTask
+    $state.OutTask = $stdout.Task
+    $state.ErrTask = $stderr.Task
+    if ($stdout.Data.Length) { $chunks += ,$stdout.Data }
+    if ($stderr.Data.Length) { $chunks += ,$stderr.Data }
+    $output = Join-PtyBytes $chunks
+    if ($output.Length) { $state.LastIo = Get-Date }
+    $alive = -not $state.Process.HasExited -and -not $stdout.Eof
+    if (-not $alive) {
+      $code = if ($state.Process.HasExited) { $state.Process.ExitCode } else { 0 }
+      Complete-PtySession 'The shell exited.' $code $output
+      return
+    }
+
+    $reply = Send-PtyExchange $state.Id $output $true $null ''
+    $data = $reply.data
+    if (-not $data) { return }
+    $state.Failures = 0
+    if ($data.close) {
+      Complete-PtySession 'Session closed.' 0
+      return
+    }
+    if ($data.input) {
+      $inBytes = [Convert]::FromBase64String([string]$data.input)
+      if ($inBytes.Length) {
+        $state.Process.StandardInput.BaseStream.Write($inBytes, 0, $inBytes.Length)
+        $state.Process.StandardInput.BaseStream.Flush()
+        $state.LastIo = Get-Date
+      }
+    }
+    if ($data.signal -eq 'INT' -or $data.signal -eq 'TERM') {
+      # No console, so Ctrl+C is a best-effort byte. Close the session to kill the process.
+      $break = [byte[]](3)
+      $state.Process.StandardInput.BaseStream.Write($break, 0, 1)
+      $state.Process.StandardInput.BaseStream.Flush()
+      $state.LastIo = Get-Date
+    }
+    if ($data.user -and [string]$data.user -ne [string]$env:USERNAME) {
+      $note = "SnippyCode: Windows agents run as the service account ($env:USERNAME) and cannot switch to $($data.user).`r`n"
+      $state.Note = [Text.Encoding]::UTF8.GetBytes($note)
+    }
+  } catch {
+    if ($script:LivePty) { $script:LivePty.Failures += 1 }
+    Write-Log "Terminal session error: $($_.Exception.Message)"
+  }
+}
+
 Write-Log "SnippyCode agent $AgentVersion polling $Url"
 $backoff = 5
 $factsAt = [datetime]::MinValue
@@ -245,8 +453,11 @@ while ($true) {
   }
 
   try {
+    if ($script:LivePty) { Sync-PtySession }
     $caps = [uri]::EscapeDataString((Get-Capabilities))
-    $response = Invoke-WebRequest -UseBasicParsing -Uri "$Url/api/agent/next?wait=25&version=$AgentVersion&caps=$caps&agentId=$AgentId" `
+    # An open terminal has to be pumped; don't sit in a 25s poll while it is live.
+    $wait = if ($script:LivePty) { 0 } else { 25 }
+    $response = Invoke-WebRequest -UseBasicParsing -Uri "$Url/api/agent/next?wait=$wait&version=$AgentVersion&caps=$caps&agentId=$AgentId" `
       -Headers $Headers -TimeoutSec 45
 
     $latest = [string]$response.Headers['X-Agent-Latest']
@@ -261,8 +472,12 @@ while ($true) {
       $timeout = [int]$response.Headers['X-Job-Timeout-Ms']
       if ($timeout -le 0) { $timeout = 300000 }
       $code = if ($response.Content -is [byte[]]) { [Text.Encoding]::UTF8.GetString($response.Content) } else { [string]$response.Content }
-      Write-Log "Running job $id ($language)"
-      Invoke-Job $id $language $timeout $code
+      if ($language -eq 'pty') {
+        Start-PtySession $id $code
+      } else {
+        Write-Log "Running job $id ($language)"
+        Invoke-Job $id $language $timeout $code
+      }
     }
     $backoff = 5
   } catch {
