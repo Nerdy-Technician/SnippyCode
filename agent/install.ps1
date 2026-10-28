@@ -26,7 +26,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$AgentVersion = '1.3.0'
+$AgentVersion = '1.5.0'
 $TaskName = 'SnippyCode Agent'
 $Root = Join-Path $env:ProgramData 'SnippyCode'
 $Agent = Join-Path $Root 'snippycode-agent.ps1'

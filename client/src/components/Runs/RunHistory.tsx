@@ -13,15 +13,43 @@ interface Props {
 }
 
 const resultLabel = (run: SnippetRunRecord): string =>
-  run.timedOut ? 'Timed out' : run.ok ? 'OK' : `Exit ${run.exitCode}`;
+  run.timedOut ? 'Timed out' : run.ok ? 'OK' : `Failed · exit ${run.exitCode ?? '—'}`;
 
-export const RunOutput = (props: { run: SnippetRunRecord }): JSX.Element => (
-  <div className='run-record-output'>
-    {props.run.stdout && <pre className='run-output'>{props.run.stdout}</pre>}
-    {props.run.stderr && <pre className='run-output is-stderr'>{props.run.stderr}</pre>}
-    {!props.run.stdout && !props.run.stderr && <p className='text-muted mb-0'>No output.</p>}
-  </div>
-);
+export const RunOutput = (props: { run: SnippetRunRecord }): JSX.Element => {
+  const { run } = props;
+  const failed = !run.ok;
+  return (
+    <div className={`run-record-output${failed ? ' is-failed' : ''}`}>
+      {failed && (
+        <p className='run-failure-summary' role='status'>
+          {run.timedOut
+            ? `Stopped after ${(run.durationMs / 1000).toFixed(1)}s because it timed out.`
+            : `Failed with exit code ${run.exitCode ?? 'unknown'} after ${(run.durationMs / 1000).toFixed(1)}s.`}
+          {run.stderr ? ' Errors are shown first.' : ''}
+        </p>
+      )}
+      {failed && run.stderr && (
+        <section className='run-output-block'>
+          <h6 className='run-output-label is-stderr'>Errors</h6>
+          <pre className='run-output is-stderr'>{run.stderr}</pre>
+        </section>
+      )}
+      {run.stdout && (
+        <section className='run-output-block'>
+          <h6 className='run-output-label'>Output</h6>
+          <pre className='run-output'>{run.stdout}</pre>
+        </section>
+      )}
+      {!failed && run.stderr && (
+        <section className='run-output-block'>
+          <h6 className='run-output-label is-stderr'>Errors</h6>
+          <pre className='run-output is-stderr'>{run.stderr}</pre>
+        </section>
+      )}
+      {!run.stdout && !run.stderr && <p className='text-muted mb-0'>No output.</p>}
+    </div>
+  );
+};
 
 export const RunHistory = (props: Props): JSX.Element => {
   const { query, showSnippet = true, showSite = true, limit = 50, empty } = props;
@@ -68,7 +96,7 @@ export const RunHistory = (props: Props): JSX.Element => {
   return (
     <ul className='run-list'>
       {runs.map(run => (
-        <li key={run.id} className={open?.id === run.id ? 'is-open' : ''}>
+        <li key={run.id} className={[open?.id === run.id ? 'is-open' : '', run.ok ? '' : 'is-failed'].filter(Boolean).join(' ')}>
           <button type='button' className='run-row' onClick={() => toggle(run)}>
             <span className={`run-status ${run.ok ? 'is-ok' : 'is-bad'}`}>{resultLabel(run)}</span>
             <span className='run-row-main'>

@@ -2,7 +2,7 @@
  * Shared automation: queueing work for device agents, finishing jobs, running
  * runbook steps (by hand or unattended), and closing out schedule runs.
  */
-import { Op } from 'sequelize';
+import { Op, Transaction } from 'sequelize';
 import {
   AgentJobInstance,
   AgentJobModel,
@@ -159,6 +159,39 @@ export const queueToolJob = async (options: {
     kind: 'tool',
     tool: options.tool
   });
+};
+
+/**
+ * Queue an interactive terminal. The payload is a shell= / user= spec, not a
+ * script, and one-shot jobs never use the pty language.
+ */
+export const queuePtyJob = async (options: {
+  device: DeviceInstance;
+  code: string;
+  title: string;
+  userId?: number | null;
+  transaction?: Transaction;
+}): Promise<AgentJobInstance> => {
+  if (options.device.clonePendingApproval) {
+    throw new Error(`${options.device.name} is waiting for clone approval`);
+  }
+
+  return AgentJobModel.create(
+    {
+      deviceId: options.device.id,
+      siteId: options.device.siteId,
+      snippetId: null,
+      snippetTitle: options.title.slice(0, 255),
+      userId: options.userId || null,
+      language: 'pty',
+      payload: encryptSecret(options.code),
+      secretValues: '',
+      timeoutMs: AGENT_MAX_TIMEOUT_MS,
+      kind: 'tool',
+      tool: 'shell'
+    },
+    { transaction: options.transaction }
+  );
 };
 
 const summarize = (tool: ReadTool, data: any): string => {
