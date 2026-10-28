@@ -7,6 +7,7 @@ const root = process.cwd();
 const linux = readFileSync(join(root, 'agent/snippycode-agent.sh'), 'utf8');
 const windows = readFileSync(join(root, 'agent/snippycode-agent.ps1'), 'utf8');
 const helper = readFileSync(join(root, 'agent/pty_session.py'), 'utf8');
+const winHelper = readFileSync(join(root, 'agent/pty_session.ps1'));
 
 describe('agent terminal wiring', () => {
   test('one-shot jobs still run with stdin closed and PowerShell -NonInteractive', () => {
@@ -29,6 +30,22 @@ describe('agent terminal wiring', () => {
     assert.match(linux, /found="\$\{found\}pty,"/);
     assert.match(windows, /\$AgentVersion = '1\.5\.0'/);
     assert.match(windows, /@\('powershell', 'cmd', 'pty'\)/);
-    assert.match(windows, /cannot switch to \$user without a password/);
+  });
+
+  test('the Windows agent embeds the ConPTY helper unchanged and runs it out of process', () => {
+    const block = windows.match(/\$PtyHelperB64 = @\(\n([\s\S]*?)\n\) -join ''/);
+    assert.ok(block);
+    const b64 = block[1].replace(/[\s']/g, '');
+    assert.ok(Buffer.from(b64, 'base64').equals(winHelper));
+    const text = winHelper.toString('utf8');
+    assert.match(text, /CreatePseudoConsole/);
+    assert.match(text, /ResizePseudoConsole/);
+    assert.match(text, /WTSQueryUserToken/);
+    assert.match(windows, /Start-Process -FilePath 'powershell\.exe'/);
+  });
+
+  test('the Linux helper switches with sudo -n or su when the agent is not root', () => {
+    assert.match(helper, /"sudo", "-n", "-u", user, "--", "true"/);
+    assert.match(helper, /su - %s/);
   });
 });

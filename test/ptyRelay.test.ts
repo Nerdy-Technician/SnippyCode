@@ -1,3 +1,4 @@
+/* eslint-disable no-control-regex -- terminal escape sequences */
 import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'child_process';
@@ -11,7 +12,6 @@ import {
   openTerminalSession,
   pushTerminalInput,
   requestTerminalClose,
-  requestTerminalUser,
   resetTerminalSessions
 } from '../src/utils/terminalSession';
 
@@ -95,7 +95,7 @@ describe('pty relay', () => {
     });
 
     try {
-      await waitFor(() => output, /[#$] /);
+      await waitFor(() => output, /[#$](?:\u001b\[[0-9;]*m)* /);
       const session = openTerminalSession({ deviceId: 1, jobId: 42, os: 'linux', shell: 'bash', user: '' });
       pushTerminalInput(session, 'read -p "Continue? " answer; printf "got:%s\\n" "$answer"\r');
       await waitFor(() => output, /Continue\?/);
@@ -104,7 +104,6 @@ describe('pty relay', () => {
       assert.match(text, /got:y/);
       if (process.getuid?.() !== 0) {
         assert.equal(session.privileged, false);
-        assert.throws(() => requestTerminalUser(session, 'root'), /not root/);
       }
 
       requestTerminalClose(session);
@@ -115,9 +114,28 @@ describe('pty relay', () => {
     assert.equal(stderr.includes('Traceback'), false, stderr);
   });
 
-  test('refuses an account the agent cannot become', async () => {
+  test('alternate screen sequences pass through untouched', async () => {
+    const spec = join(dir, 'spec-alt');
+    writeFileSync(spec, 'v=1\nshell=bash\nuser=\n');
+    const port = (server.address() as AddressInfo).port;
+    const child = spawn('python3', [helper, '42', spec], { env: childEnv(`http://127.0.0.1:${port}`) });
+    const exited = new Promise<number | null>(resolve => child.on('exit', resolve));
+    try {
+      await waitFor(() => output, /[#$](?:\u001b\[[0-9;]*m)* /);
+      const session = openTerminalSession({ deviceId: 1, jobId: 42, os: 'linux', shell: 'bash', user: '' });
+      pushTerminalInput(session, "printf '\\033[?1049hALT\\033[?1049l'; stty size\r");
+      const text = await waitFor(() => output, /\u001b\[\?1049hALT\u001b\[\?1049l/);
+      assert.match(text, /ALT/);
+      requestTerminalClose(session);
+      assert.equal(await exited, 0);
+    } finally {
+      child.kill('SIGTERM');
+    }
+  });
+
+  test('refuses an account that does not exist', async () => {
     const spec = join(dir, 'spec-user');
-    const user = process.getuid?.() === 0 ? 'nosuch-snippy-user' : 'root';
+    const user = 'nosuch-snippy-user';
     writeFileSync(spec, `v=1\nshell=bash\nuser=${user}\n`);
     const port = (server.address() as AddressInfo).port;
     const child = spawn('python3', [helper, '42', spec], {
@@ -125,8 +143,8 @@ describe('pty relay', () => {
     });
     const exited = new Promise<number | null>(resolve => child.on('exit', resolve));
     try {
-      const text = await waitFor(() => output, /not root|no local account/);
-      assert.match(text, user === 'root' ? /not root/ : /no local account/);
+      const text = await waitFor(() => output, /no local account/);
+      assert.match(text, /no local account/);
       assert.equal(await exited, 1);
     } finally {
       child.kill('SIGTERM');

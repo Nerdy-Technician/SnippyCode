@@ -168,7 +168,7 @@ const OneShotTerminal = (props: {
           </div>
         )}
         {entries.map((entry, index) => (
-          <div key={index} className='terminal-entry'>
+          <div key={index} className={`terminal-entry${entry.status === 'failed' || entry.status === 'lost' ? ' is-failed' : ''}`}>
             <div>
               <span className='terminal-prompt'>{prompt(entry.cwd)}</span> {entry.command}
             </div>
@@ -183,7 +183,11 @@ const OneShotTerminal = (props: {
                 {entry.status === 'lost' ? (
                   <div className='terminal-error'>The device did not answer.</div>
                 ) : (
-                  entry.status === 'failed' && <div className='terminal-muted'>exit {entry.exit ?? '—'} · {entry.seconds}s</div>
+                  entry.status === 'failed' && (
+                    <div className='terminal-failure'>
+                      ✗ failed · exit {entry.exit ?? '—'} · {entry.seconds}s
+                    </div>
+                  )
                 )}
               </>
             )}

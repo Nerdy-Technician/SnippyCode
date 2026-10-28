@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { AgentJobState } from '../../typescript/interfaces';
-import { renderTerminal } from '../../utils/terminalText';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import '@xterm/xterm/css/xterm.css';
 
 type RunTool = (tool: string, args?: Record<string, unknown>, key?: string) => Promise<AgentJobState | null>;
 
 const OS_USER = /^[a-z_][a-z0-9_.-]{0,31}$/;
+const WINDOWS_USER = /^[A-Za-z0-9_][A-Za-z0-9_. $'-]{0,63}$/;
 
 interface SessionView {
   id: string;
@@ -40,31 +43,55 @@ export const InteractiveTerminal = (props: {
   const [account, setAccount] = useState('');
   const [accounts, setAccounts] = useState<string[]>(props.suggestedUsers);
   const [session, setSession] = useState<SessionView | null>(null);
-  const [raw, setRaw] = useState('');
   const [error, setError] = useState('');
   const [loadingAccounts, setLoadingAccounts] = useState(false);
-  const screen = useRef<HTMLPreElement>(null);
+  const screen = useRef<HTMLDivElement>(null);
+  const term = useRef<Terminal | null>(null);
+  const fit = useRef<FitAddon | null>(null);
+  const live = useRef<SessionView | null>(null);
   const since = useRef(0);
   const size = useRef({ cols: 100, rows: 32 });
+  live.current = session;
 
+  // Real terminal emulator: colours, cursor moves and the alternate screen,
+  // so vim, top, less and htop draw properly.
   useEffect(() => {
-    screen.current?.scrollTo({ top: screen.current.scrollHeight });
-  }, [raw, session?.status]);
-
-  useEffect(() => {
-    const box = screen.current;
-    if (!box) return;
+    if (!screen.current) return undefined;
+    const terminal = new Terminal({
+      cursorBlink: true,
+      convertEol: false,
+      scrollback: 5000,
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+      fontSize: 13,
+      theme: { background: '#0d1117', foreground: '#e6edf3' }
+    });
+    const fitter = new FitAddon();
+    terminal.loadAddon(fitter);
+    terminal.open(screen.current);
+    term.current = terminal;
+    fit.current = fitter;
     const measure = () => {
-      const style = window.getComputedStyle(box);
-      const font = parseFloat(style.fontSize) || 14;
-      const cols = Math.max(40, Math.floor(box.clientWidth / (font * 0.62)));
-      const rows = Math.max(12, Math.floor(box.clientHeight / (font * 1.45)));
-      size.current = { cols, rows };
+      try {
+        fitter.fit();
+      } catch {
+        return;
+      }
+      size.current = { cols: terminal.cols, rows: terminal.rows };
     };
     measure();
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    observer?.observe(screen.current);
     window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
-  }, [session?.id]);
+    const typing = terminal.onData(data => sendRef.current(data));
+    terminal.writeln('Connect to start a session.');
+    return () => {
+      typing.dispose();
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+      terminal.dispose();
+      term.current = null;
+    };
+  }, []);
 
   const sessionId = session?.id;
   const sessionStatus = session?.status;
@@ -88,8 +115,10 @@ export const InteractiveTerminal = (props: {
             continue;
           }
           since.current = data.next;
-          if (data.reset) setRaw(data.output);
-          else if (data.output) setRaw(current => current + data.output);
+          if (data.reset) {
+            term.current?.reset();
+            term.current?.write(data.output);
+          } else if (data.output) term.current?.write(data.output);
           setSession(current => (current && current.id === data.id ? { ...current, ...data } : current));
           if (data.status === 'closed') break;
         } catch (err) {
@@ -109,28 +138,31 @@ export const InteractiveTerminal = (props: {
 
   const connect = async () => {
     setError('');
-    setRaw('');
+    term.current?.reset();
     since.current = 0;
     try {
       const res = await axios.post<{ data: SessionView }>(`/api/devices/${props.deviceId}/terminal/session`, {
         shell,
-        user: props.windows ? '' : account.trim()
+        user: account.trim()
       });
       since.current = res.data.data.next || 0;
-      if (res.data.data.reset || res.data.data.output) setRaw(res.data.data.output || '');
+      if (res.data.data.reset || res.data.data.output) term.current?.write(res.data.data.output || '');
       setSession(res.data.data);
-      window.setTimeout(() => screen.current?.focus(), 0);
+      window.setTimeout(() => term.current?.focus(), 0);
     } catch (err) {
       setError(apiError(err, 'Could not open a terminal.'));
     }
   };
 
   const send = (data: string) => {
-    if (!session || session.status === 'closed') return;
-    axios.post(`/api/devices/${props.deviceId}/terminal/session/input`, { session: session.id, data }).catch(err => {
+    const current = live.current;
+    if (!current || current.status === 'closed') return;
+    axios.post(`/api/devices/${props.deviceId}/terminal/session/input`, { session: current.id, data }).catch(err => {
       setError(apiError(err, 'Could not send that keystroke.'));
     });
   };
+  const sendRef = useRef(send);
+  sendRef.current = send;
 
   const close = async () => {
     if (!session) return;
@@ -156,66 +188,29 @@ export const InteractiveTerminal = (props: {
     setError('');
     const job = await props.runTool(
       'shell',
-      {
-        code: "getent passwd 2>/dev/null | awk -F: '($3==0 || $3>=1000) && $7 !~ /(nologin|false)$/ { print $1 }'",
-        shell: 'bash'
-      },
+      props.windows
+        ? {
+            // Signed-in users (console or remote desktop): the ones a SYSTEM agent can open a shell as.
+            code: "quser 2>$null | Select-Object -Skip 1 | ForEach-Object { ($_.Trim().TrimStart('>') -split '\\s+')[0] }",
+            shell: 'powershell'
+          }
+        : {
+            code: "getent passwd 2>/dev/null | awk -F: '($3==0 || $3>=1000) && $7 !~ /(nologin|false)$/ { print $1 }'",
+            shell: 'bash'
+          },
       'terminal-users'
     );
     setLoadingAccounts(false);
     const names = (job?.run?.stdout || '')
       .split(/\r?\n/)
       .map(item => item.trim())
-      .filter(item => OS_USER.test(item) && !item.includes('..'));
+      .filter(item => (props.windows ? WINDOWS_USER.test(item) : OS_USER.test(item)) && !item.includes('..'));
     if (!job) return;
     if (!names.length) {
-      setError(job.run?.stderr || 'No local accounts were listed.');
+      setError(job.run?.stderr || (props.windows ? 'Nobody is signed in on this machine.' : 'No local accounts were listed.'));
       return;
     }
     setAccounts(Array.from(new Set([...accounts, ...names])));
-  };
-
-  const onKey = (event: React.KeyboardEvent<HTMLPreElement>) => {
-    if (!session || session.status === 'closed') return;
-    if (event.nativeEvent.isComposing) return;
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      send('\r');
-    } else if (event.key === 'Backspace') {
-      event.preventDefault();
-      send('\u007f');
-    } else if (event.key === 'Tab') {
-      event.preventDefault();
-      send('\t');
-    } else if (event.key === 'c' && event.ctrlKey) {
-      event.preventDefault();
-      axios.post(`/api/devices/${props.deviceId}/terminal/session/signal`, { session: session.id, signal: 'INT' }).catch(() => undefined);
-    } else if (event.key === 'd' && event.ctrlKey) {
-      event.preventDefault();
-      send('\u0004');
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      send('\u001b[A');
-    } else if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      send('\u001b[B');
-    } else if (event.key === 'ArrowRight') {
-      event.preventDefault();
-      send('\u001b[C');
-    } else if (event.key === 'ArrowLeft') {
-      event.preventDefault();
-      send('\u001b[D');
-    } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
-      event.preventDefault();
-      send(event.key);
-    }
-  };
-
-  const onPaste = (event: React.ClipboardEvent<HTMLPreElement>) => {
-    const text = event.clipboardData.getData('text');
-    if (!text) return;
-    event.preventDefault();
-    send(text.replace(/\r?\n/g, '\r'));
   };
 
   const open = Boolean(session && session.status !== 'closed');
@@ -231,32 +226,28 @@ export const InteractiveTerminal = (props: {
             </button>
           ))}
         </div>
-        {props.windows ? (
-          <span className='form-text'>Runs as the agent service account (usually SYSTEM). Windows cannot switch users from here.</span>
-        ) : (
-          <label className='terminal-user-field' htmlFor='terminal-user'>
-            OS user
-            <input
-              id='terminal-user'
-              className='form-control form-control-sm'
-              list='terminal-user-list'
-              value={account}
-              placeholder='agent account'
-              disabled={open && session?.canSwitchUser === false}
-              onChange={event => setAccount(event.target.value)}
-              autoCapitalize='off'
-              autoCorrect='off'
-              spellCheck={false}
-            />
-            <datalist id='terminal-user-list'>
-              <option value='root' />
-              {accounts.map(item => (
-                <option key={item} value={item} />
-              ))}
-            </datalist>
-          </label>
-        )}
-        {!props.windows && !open && (
+        <label className='terminal-user-field' htmlFor='terminal-user'>
+          {props.windows ? 'Windows user' : 'OS user'}
+          <input
+            id='terminal-user'
+            className='form-control form-control-sm'
+            list='terminal-user-list'
+            value={account}
+            placeholder={props.windows ? 'service account' : 'agent account'}
+            disabled={open && session?.canSwitchUser === false}
+            onChange={event => setAccount(event.target.value)}
+            autoCapitalize='off'
+            autoCorrect='off'
+            spellCheck={false}
+          />
+          <datalist id='terminal-user-list'>
+            {!props.windows && <option value='root' />}
+            {accounts.map(item => (
+              <option key={item} value={item} />
+            ))}
+          </datalist>
+        </label>
+        {!open && (
           <button type='button' className='btn btn-sm btn-outline-secondary' onClick={loadAccounts} disabled={loadingAccounts || !props.online}>
             {loadingAccounts ? 'Looking up accounts…' : 'Load accounts'}
           </button>
@@ -267,11 +258,9 @@ export const InteractiveTerminal = (props: {
           </button>
         ) : (
           <>
-            {!props.windows && (
-              <button type='button' className='btn btn-sm btn-outline-secondary' onClick={switchUser} disabled={!account.trim() || session?.canSwitchUser === false}>
-                Switch user
-              </button>
-            )}
+            <button type='button' className='btn btn-sm btn-outline-secondary' onClick={switchUser} disabled={!account.trim() || session?.canSwitchUser === false}>
+              Switch user
+            </button>
             <button type='button' className='btn btn-sm btn-outline-secondary' onClick={close}>
               Close session
             </button>
@@ -283,26 +272,17 @@ export const InteractiveTerminal = (props: {
         {open
           ? `Connected as ${who} on ${props.name}. ${
               session?.tty === false
-                ? 'Stdin is connected, but this is not a full console, so some password prompts can still refuse. '
+                ? 'This Windows build has no pseudo console, so full-screen programs and some prompts will not work. '
                 : ''
-            }Keystrokes are not stored. Ctrl+C interrupts. Close the session when you are done.`
-          : `Opens a shell on ${props.name} and sends what you type, including passwords and y/n answers. Pick an account before connecting. Full-screen programs (editors, top) are not supported.`}
+            }Keystrokes are not stored. Close the session when you are done.`
+          : props.windows
+            ? `Opens a shell on ${props.name}. Leave the user empty for the agent account, or pick someone signed in (console or remote desktop) to open the shell as them.`
+            : `Opens a shell on ${props.name}. Leave the user empty for the agent account. Switching needs a root agent or passwordless sudo; otherwise su asks for the password here.`}
         {session?.status === 'starting' && ' Waiting for the agent…'}
         {session?.closing && ' Closing…'}
         {session?.status === 'closed' && session.message ? ` ${session.message}` : ''}
       </p>
-      <pre
-        className='terminal-screen terminal-live mono'
-        ref={screen}
-        tabIndex={0}
-        role='log'
-        aria-label='Terminal'
-        onKeyDown={onKey}
-        onPaste={onPaste}
-        onClick={() => screen.current?.focus()}
-      >
-        {raw ? renderTerminal(raw) : open ? '' : 'Connect to start a session.'}
-      </pre>
+      <div className='terminal-screen terminal-live terminal-xterm' ref={screen} role='application' aria-label='Terminal' />
     </div>
   );
 };

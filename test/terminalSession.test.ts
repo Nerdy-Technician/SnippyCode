@@ -22,14 +22,17 @@ import {
 describe('terminal sessions', () => {
   beforeEach(() => resetTerminalSessions());
 
-  test('account names are allow-listed and Windows cannot switch', () => {
+  test('account names are allow-listed on Linux and Windows', () => {
     assert.equal(assertOsUser('alice', 'linux'), 'alice');
     assert.equal(assertOsUser(' ec2-user ', 'linux'), 'ec2-user');
     assert.equal(assertOsUser('', 'linux'), '');
     for (const bad of ['root;id', '$(id)', '../root', '-rf', 'Alice', 'user name']) {
       assert.throws(() => assertOsUser(bad, 'linux'), /account name/);
     }
-    assert.throws(() => assertOsUser('alice', 'windows'), /service account/);
+    assert.equal(assertOsUser('Alice Smith', 'windows'), 'Alice Smith');
+    for (const bad of ['dom\\alice', 'a;b', '"x"', 'a|b', '../x', 'name.']) {
+      assert.throws(() => assertOsUser(bad, 'windows'), /Windows account/);
+    }
     assert.equal(assertShell('sh', 'linux'), 'sh');
     assert.throws(() => assertShell('zsh', 'linux'), /Unknown shell/);
     assert.equal(terminalSpec('bash', 'alice'), 'v=1\nshell=bash\nuser=alice\n');
@@ -72,10 +75,10 @@ describe('terminal sessions', () => {
     assert.ok(reset.output.length <= TERMINAL_OUTPUT_CAP);
   });
 
-  test('user switch is queued once, and a non-root agent is refused', async () => {
+  test('user switch is queued once, including from a non-root agent (su or sudo on the device)', async () => {
     const session = openTerminalSession({ deviceId: 4, jobId: 12, os: 'linux', shell: 'bash', user: '' });
     await exchangeTerminal(session, { alive: true, privileged: false, user: 'agent' }, 0);
-    assert.throws(() => requestTerminalUser(session, 'root'), /not root/);
+    assert.equal(requestTerminalUser(session, 'root'), 'root');
 
     const root = openTerminalSession({ deviceId: 5, jobId: 13, os: 'linux', shell: 'bash', user: 'root' });
     await exchangeTerminal(root, { alive: true, privileged: true, user: 'root' }, 0);

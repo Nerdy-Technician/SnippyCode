@@ -349,20 +349,62 @@ def user_exists(user):
         return False
 
 
+def sudo_allowed(user):
+    """True when sudo lets this account become user without a password."""
+    if not shutil.which("sudo"):
+        return False
+    try:
+        return (
+            subprocess.call(
+                ["sudo", "-n", "-u", user, "--", "true"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+            == 0
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def spawn_argv(shell, user):
+    """argv for the shell, or raise PermissionError when only su (password) can switch."""
     argv = list(SHELLS[shell])
     if not user or user == current_user():
         return argv
-    if os.geteuid() != 0:
-        raise PermissionError(user)
     if not user_exists(user):
         raise LookupError(user)
-    if shutil.which("runuser"):
-        return ["runuser", "-u", user, "--", *argv]
-    if shutil.which("sudo"):
-        return ["sudo", "-n", "-u", user, "--", *argv]
-    # Login shell: su picks the account's shell, not ours. Last resort.
-    return ["su", "-", user]
+    if os.geteuid() == 0:
+        if shutil.which("runuser"):
+            return ["runuser", "-u", user, "--", *argv]
+        if shutil.which("sudo"):
+            return ["sudo", "-n", "-u", user, "--", *argv]
+        # Login shell: su picks the account's shell, not ours. Last resort.
+        return ["su", "-", user]
+    if sudo_allowed(user):
+        return ["sudo", "-n", "-u", user, "-H", "--", *argv]
+    raise PermissionError(user)
+
+
+def foreground_user(fd):
+    """Account of whatever runs in the foreground of the terminal (su, sudo -i, ...)."""
+    try:
+        import pwd
+
+        pgid = os.tcgetpgrp(fd)
+        with open("/proc/%d/status" % pgid, "r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("Uid:"):
+                    return pwd.getpwuid(int(line.split()[1])).pw_name
+    except (OSError, KeyError, ValueError, IndexError, ImportError):
+        pass
+    return ""
+
+
+def su_command(user):
+    """Typed into the running shell so a wrong password drops back to it."""
+    return ("su - %s\r" % user).encode()
 
 
 def spawn(shell, user):
@@ -525,9 +567,15 @@ def apply_instruction(fd, pid, shell, active, instruction):
         try:
             new_pid, new_fd = spawn(shell, requested)
         except PermissionError:
+            # Not root and no passwordless sudo: su asks for the password in this terminal.
+            if fd is not None:
+                try:
+                    os.write(fd, su_command(requested))
+                except OSError:
+                    pass
             note += (
-                "\r\nSnippyCode: cannot switch to %s; this agent is not root (running as %s).\r\n"
-                % (requested, current_user())
+                "\r\nSnippyCode: this agent runs as %s, so switching to %s uses su. "
+                "Type %s's password at the prompt; exit returns here.\r\n" % (current_user(), requested, requested)
             ).encode()
         except LookupError:
             note += ("\r\nSnippyCode: there is no local account named %s.\r\n" % requested).encode()
@@ -574,16 +622,17 @@ def main():
         return 2
     bridge = Bridge(sys.argv[1])
     active = user or current_user()
+    via_su = False
     try:
         pid, fd = spawn(shell, user)
     except PermissionError:
-        return report_and_exit(
-            bridge,
-            current_user(),
-            "SnippyCode: this agent is not root, so it cannot run as %s. It is running as %s."
-            % (user, current_user()),
-            1,
-        )
+        # Open as the agent account and let su ask for the password in the terminal.
+        via_su = True
+        active = current_user()
+        try:
+            pid, fd = spawn(shell, "")
+        except (OSError, ValueError) as exc:
+            return report_and_exit(bridge, active, "SnippyCode: could not start the shell: %s" % exc, 127)
     except LookupError:
         return report_and_exit(bridge, current_user(), "SnippyCode: there is no local account named %s." % user, 1)
     except (OSError, ValueError) as exc:
@@ -594,6 +643,15 @@ def main():
     exit_code = 0
     message = ""
     pending = ("SnippyCode terminal (%s, account %s). Keystrokes go to this shell.\r\n" % (shell, active)).encode()
+    if via_su:
+        pending += (
+            "SnippyCode: this agent is not root and sudo needs a password, so it runs su for %s. "
+            "Type the password at the prompt.\r\n" % user
+        ).encode()
+        try:
+            os.write(fd, su_command(user))
+        except OSError:
+            pass
     try:
         while True:
             now = time.time()
@@ -611,6 +669,7 @@ def main():
             pending = b""
             if chunk:
                 last_io = time.time()
+            active = foreground_user(fd) or active
             instruction = bridge.exchange(chunk, active, True, None, "")
             if instruction is None:
                 time.sleep(0.4)

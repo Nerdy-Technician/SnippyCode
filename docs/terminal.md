@@ -29,13 +29,16 @@ in the meantime.
 | `POST .../terminal/session/close` | browser | End the shell |
 | `POST /api/agent/jobs/:id/tty?wait=` | agent | `{ "output" (base64), "user", "alive", "privileged", "tty", "exitCode", "message" }` |
 
-`user` is a local Linux account (`letters, digits, _, . and -`). An empty user means the
-agent's own account. The agent switches only when it is root (`runuser`, otherwise `sudo -n`,
-otherwise `su`). If it is not root, the switch is refused and the shell stays as it is.
+`user` is a local account. An empty user means the agent's own account.
 
-Windows sessions run as the agent service account, usually SYSTEM. Switching users is refused:
-doing it safely would need that account's password, and this does not ask for one or reuse a
-stored remote-desktop password.
+On Linux (`letters, digits, _, . and -`): a root agent switches with `runuser` (or `sudo -n`, or `su`).
+A non-root agent uses `sudo -n -u <user>` when sudoers allows it without a password; otherwise it
+types `su - <user>` into the session so the account's password is asked for in the terminal, and
+`exit` returns to the agent account. The account shown is whoever owns the foreground process.
+
+On Windows the agent (SYSTEM) can open the shell as any user who is signed in, at the console or
+over remote desktop, using that session's token. No password is asked for or stored. Users who are
+not signed in are refused with a clear message. "Load accounts" lists signed-in users (`quser`).
 
 The same admin rule as the device shell applies (admins, or editors when
 `DEVICE_SHELL_FOR_EDITORS=true`).
@@ -49,8 +52,12 @@ prompt is not written to the database.
 ### Limits
 
 One session per device. It closes after 15 minutes with no input and no output, or after 4 hours.
-On Linux the helper is a real PTY, so `read`, `sudo`, and most y/n prompts work. Full-screen
-programs (editors, `top`) are not supported. On Windows, stdin is connected but it is not a
-ConPTY, so a program that insists on a real console can still refuse. An open Linux session does
-not block other device tools. An open Windows session is pumped alongside polling; a one-shot job
-still pauses the terminal while that job runs.
+The browser side is a real terminal emulator (xterm.js), and the window size is passed to the
+device, so full-screen programs (`vim`, `top`, `less`, `htop`) work.
+
+On Linux the helper is a real PTY. On Windows 10 1809 / Server 2019 and later the helper is a
+ConPTY pseudo console, so console-only prompts, full-screen programs and Ctrl+C behave as they do
+locally. Older Windows builds fall back to redirected pipes and say so when the session opens.
+
+On both platforms the session runs in its own helper process, so one-shot jobs (other tools,
+automation) keep running while a session is open and do not pause it.

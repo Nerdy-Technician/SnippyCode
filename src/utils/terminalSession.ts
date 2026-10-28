@@ -79,6 +79,11 @@ const byJob = new Map<number, TerminalSession>();
 const byDevice = new Map<number, string>();
 
 const OS_USER = /^[a-z_][a-z0-9_.-]{0,31}$/;
+// Windows account names: no \ / [ ] : ; | = , + * ? < > " @ and not only dots/spaces.
+const WINDOWS_USER = /^[A-Za-z0-9_][A-Za-z0-9_. $'-]{0,63}$/;
+
+const validUser = (user: string, os: ToolOs): boolean =>
+  os === 'windows' ? WINDOWS_USER.test(user) && !user.endsWith('.') : OS_USER.test(user);
 
 export const resetTerminalSessions = (): void => {
   byId.clear();
@@ -92,7 +97,10 @@ export const assertOsUser = (user: unknown, os: ToolOs): string => {
     return '';
   }
   if (os === 'windows') {
-    throw new TerminalError('Windows agents run as the service account and cannot switch users without a password.');
+    if (!validUser(trimmed, os)) {
+      throw new TerminalError('Enter a Windows account name (letters, digits, spaces, _, . and -).');
+    }
+    return trimmed;
   }
   if (!OS_USER.test(trimmed) || trimmed.includes('..') || trimmed.startsWith('.') || trimmed.startsWith('-')) {
     throw new TerminalError('Enter a local account name using letters, digits, _, . and -.');
@@ -275,11 +283,6 @@ export const requestTerminalUser = (session: TerminalSession, user: unknown): st
   if (session.status === 'closed') {
     throw new TerminalError('This session is closed.');
   }
-  if (session.privileged === false) {
-    throw new TerminalError(
-      `This agent is not root${session.activeUser ? ` (running as ${session.activeUser})` : ''}, so it cannot switch users.`
-    );
-  }
   session.switchUser = next;
   session.lastInputAt = Date.now();
   wake(session.agentWaiters);
@@ -341,7 +344,7 @@ export const terminalView = (session: TerminalSession, since: number): TerminalV
     activeUser: session.activeUser,
     privileged: session.privileged,
     tty: session.tty,
-    canSwitchUser: session.os === 'linux' && session.privileged !== false && session.status !== 'closed',
+    canSwitchUser: session.status !== 'closed',
     output: output.output,
     next: output.next,
     reset: output.reset,
@@ -404,7 +407,7 @@ export const exchangeTerminal = async (
 
   if (typeof update.user === 'string') {
     const reported = update.user.trim();
-    if (!reported || OS_USER.test(reported)) {
+    if (!reported || validUser(reported, session.os)) {
       session.activeUser = reported;
     }
   }
