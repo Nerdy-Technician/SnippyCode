@@ -124,7 +124,9 @@ export const getTerminalSession = asyncWrapper(async (req: AuthenticatedRequest,
 
   setTerminalSize(session, req.query.cols, req.query.rows);
   const since = Number(req.query.since);
-  const waitMs = Math.min(Math.max(Number(req.query.wait) || 0, 0), 8_000);
+  // `wait` is in seconds, like the agent's: hold the browser's poll open
+  // until there is output instead of letting it spin.
+  const waitMs = Math.round(Math.min(Math.max(Number(req.query.wait) || 0, 0), 8) * 1000);
   let closed = false;
   req.on('close', () => {
     closed = true;

@@ -11,12 +11,32 @@ const envNumber = (name: string, fallback: number): number => {
  * General limit for the API and raw links. Generous, because agents poll and
  * a busy UI makes many calls; it only stops floods from a single address.
  */
+const TERMINAL_PATH = /^\/devices\/\d+\/terminal\/session(\/(input|signal|user|close))?\/?$/;
+
+/** True for the browser side of an interactive terminal (under /api). */
+export const isTerminalPath = (path: string): boolean => TERMINAL_PATH.test(path);
+
 export const apiRateLimit = rateLimit({
   windowMs: 60_000,
   limit: envNumber('RATE_LIMIT_PER_MINUTE', 600),
+  // Terminal traffic has its own bucket so typing never starves the rest of
+  // the UI, and the UI never makes a terminal drop keystrokes.
+  skip: req => req.baseUrl === '/api' && isTerminalPath(req.path),
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: { success: false, error: 'Too many requests, please slow down' }
+});
+
+/**
+ * Limit for an open terminal. The browser batches keystrokes into one request
+ * at a time, so this only stops a flood, not fast typing.
+ */
+export const terminalRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: envNumber('TERMINAL_RATE_LIMIT_PER_MINUTE', 3000),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { success: false, error: 'Too many terminal requests, please slow down' }
 });
 
 /** Strict limit for sign-in, setup and MFA, against password guessing. */

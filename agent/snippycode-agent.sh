@@ -411,6 +411,16 @@ def spawn(shell, user):
     argv = spawn_argv(shell, user)
     pid, fd = pty.fork()
     if pid == 0:
+        # The agent starts this helper in the background from a script, so
+        # SIGINT and SIGQUIT arrive ignored. Ignored signals survive exec, which
+        # would make Ctrl+C do nothing in the shell and its jobs.
+        for name in ("SIGINT", "SIGQUIT", "SIGTSTP", "SIGTTIN", "SIGTTOU", "SIGPIPE"):
+            sig = getattr(signal, name, None)
+            if sig is not None:
+                try:
+                    signal.signal(sig, signal.SIG_DFL)
+                except (OSError, ValueError):
+                    pass
         os.environ["TERM"] = "xterm-256color"
         try:
             os.chdir("/")
@@ -445,13 +455,42 @@ def exit_status(status):
     return 1
 
 
-def kill_child(pid):
+def kill_child(pid, fd=None):
+    """Hang up the shell and whatever runs in front of it, then reap it.
+
+    runuser/sudo pass a hangup on as SIGTERM, which an interactive bash
+    ignores, so the terminal's foreground group gets the SIGHUP directly and
+    anything still alive after a few seconds is killed.
+    """
     if not pid:
         return
-    try:
-        os.killpg(pid, signal.SIGHUP)
-    except (OSError, ProcessLookupError):
-        pass
+    groups = [pid]
+    if fd is not None:
+        try:
+            groups.insert(0, os.tcgetpgrp(fd))
+        except OSError:
+            pass
+    groups = [g for g in dict.fromkeys(groups) if g and g > 0]
+    for number in (signal.SIGHUP, signal.SIGCONT):
+        for group in groups:
+            try:
+                os.killpg(group, number)
+            except (OSError, ProcessLookupError):
+                pass
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        try:
+            waited, _ = os.waitpid(pid, os.WNOHANG)
+        except (OSError, ChildProcessError):
+            return
+        if waited:
+            return
+        time.sleep(0.05)
+    for group in groups:
+        try:
+            os.killpg(group, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            pass
     try:
         os.waitpid(pid, 0)
     except (OSError, ChildProcessError):
@@ -552,16 +591,22 @@ def apply_instruction(fd, pid, shell, active, instruction):
         except OSError as exc:
             note += ("\r\nSnippyCode: could not write to the shell: %s\r\n" % exc).encode()
     sig = instruction.get("signal")
-    if sig == "INT" and pid:
-        try:
-            os.killpg(pid, signal.SIGINT)
-        except OSError:
-            pass
-    elif sig == "TERM" and pid:
-        try:
-            os.killpg(pid, signal.SIGTERM)
-        except OSError:
-            pass
+    if sig in ("INT", "TERM") and pid:
+        # Signal the job in the foreground of the terminal (e.g. `sleep`), not
+        # only the shell, which sits in its own process group.
+        number = signal.SIGINT if sig == "INT" else signal.SIGTERM
+        groups = []
+        if fd is not None:
+            try:
+                groups.append(os.tcgetpgrp(fd))
+            except OSError:
+                pass
+        groups.append(pid)
+        for group in dict.fromkeys(g for g in groups if g and g > 0):
+            try:
+                os.killpg(group, number)
+            except OSError:
+                pass
     requested = (instruction.get("user") or "").strip()
     if requested and requested != active:
         try:
@@ -582,7 +627,7 @@ def apply_instruction(fd, pid, shell, active, instruction):
         except (OSError, ValueError) as exc:
             note += ("\r\nSnippyCode: could not switch user: %s\r\n" % exc).encode()
         else:
-            kill_child(pid)
+            kill_child(pid, fd)
             if fd is not None:
                 try:
                     os.close(fd)
@@ -702,7 +747,7 @@ def main():
                 pid = 0
                 break
     finally:
-        kill_child(pid)
+        kill_child(pid, fd)
         if fd is not None:
             try:
                 os.close(fd)

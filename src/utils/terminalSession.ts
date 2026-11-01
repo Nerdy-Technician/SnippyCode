@@ -354,6 +354,12 @@ export const terminalView = (session: TerminalSession, since: number): TerminalV
   };
 };
 
+/** Longest a browser or agent request is held open (callers clamp too). */
+export const MAX_TERMINAL_WAIT_MS = 30_000;
+
+const clampWait = (waitMs: number): number =>
+  Number.isFinite(waitMs) ? Math.min(Math.max(Math.floor(waitMs), 0), MAX_TERMINAL_WAIT_MS) : 0;
+
 export const waitForTerminalOutput = (session: TerminalSession, since: number, waitMs: number): Promise<TerminalView> => {
   const ready = (): boolean => {
     const view = readTerminalOutput(session, since);
@@ -369,7 +375,7 @@ export const waitForTerminalOutput = (session: TerminalSession, since: number, w
       if (index >= 0) session.outputWaiters.splice(index, 1);
       resolve(terminalView(session, since));
     };
-    const timer = setTimeout(finish, waitMs);
+    const timer = setTimeout(finish, clampWait(waitMs));
     session.outputWaiters.push(finish);
   });
 };
@@ -447,7 +453,7 @@ export const exchangeTerminal = async (
       if (index >= 0) session.agentWaiters.splice(index, 1);
       resolve();
     };
-    const timer = setTimeout(finish, waitMs);
+    const timer = setTimeout(finish, clampWait(waitMs));
     session.agentWaiters.push(finish);
   });
 

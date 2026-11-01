@@ -7,6 +7,7 @@ import '@xterm/xterm/css/xterm.css';
 
 type RunTool = (tool: string, args?: Record<string, unknown>, key?: string) => Promise<AgentJobState | null>;
 
+const INPUT_BATCH = 8000;
 const OS_USER = /^[a-z_][a-z0-9_.-]{0,31}$/;
 const WINDOWS_USER = /^[A-Za-z0-9_][A-Za-z0-9_. $'-]{0,63}$/;
 
@@ -154,12 +155,46 @@ export const InteractiveTerminal = (props: {
     }
   };
 
+  // Keystrokes wait in one queue and go out as a single request at a time, so
+  // fast typing neither reorders nor floods the server with one POST per key.
+  const queued = useRef('');
+  const sending = useRef(false);
+  const flush = async () => {
+    if (sending.current) return;
+    sending.current = true;
+    try {
+      let attempt = 0;
+      while (queued.current) {
+        const current = live.current;
+        if (!current || current.status === 'closed') {
+          queued.current = '';
+          break;
+        }
+        const data = queued.current.slice(0, INPUT_BATCH);
+        try {
+          await axios.post(`/api/devices/${props.deviceId}/terminal/session/input`, { session: current.id, data });
+          queued.current = queued.current.slice(data.length);
+          attempt = 0;
+        } catch (err) {
+          const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+          if (status === 429 && attempt < 5) {
+            attempt += 1;
+            await new Promise(resolve => window.setTimeout(resolve, 250 * attempt));
+            continue;
+          }
+          queued.current = '';
+          setError(apiError(err, 'Could not send that keystroke.'));
+        }
+      }
+    } finally {
+      sending.current = false;
+    }
+  };
   const send = (data: string) => {
     const current = live.current;
     if (!current || current.status === 'closed') return;
-    axios.post(`/api/devices/${props.deviceId}/terminal/session/input`, { session: current.id, data }).catch(err => {
-      setError(apiError(err, 'Could not send that keystroke.'));
-    });
+    queued.current += data;
+    void flush();
   };
   const sendRef = useRef(send);
   sendRef.current = send;

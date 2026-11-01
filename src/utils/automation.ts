@@ -23,7 +23,7 @@ import {
 import { decryptSecret, encryptSecret, maskSecrets } from './secretBox';
 import { renderSnippetFor, runAndRecord } from './snippetRender';
 import { isSnippetRunEnabled, snippetRunLanguages } from './runSnippet';
-import { emitEvent } from './notify';
+import { emitEvent, trackNotification } from './notify';
 import { recordSnippetUsage } from './snippetUsage';
 import { deviceVariableValues } from './deviceFields';
 import {
@@ -64,10 +64,16 @@ const tail = (text: string, length = 600): string =>
  * Announce a finished run, unless a schedule will report it as part of its
  * summary.
  */
-export const announceRun = async (run: SnippetRunInstance): Promise<void> => {
+export const announceRun = (run: SnippetRunInstance): Promise<void> => {
   if (run.scheduleRunId) {
-    return;
+    return Promise.resolve();
   }
+  const job = sendRunAnnouncement(run);
+  trackNotification(job);
+  return job;
+};
+
+const sendRunAnnouncement = async (run: SnippetRunInstance): Promise<void> => {
 
   const [site, user] = await Promise.all([
     run.siteId ? SiteModel.findByPk(run.siteId) : null,
