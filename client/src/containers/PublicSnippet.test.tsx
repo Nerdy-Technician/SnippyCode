@@ -106,3 +106,33 @@ describe('public snippet page layout', () => {
     });
   });
 });
+
+describe('share expiry and one-shot links', () => {
+  const renderWith = async (data: object) => {
+    (axios.get as jest.Mock).mockResolvedValue({ data: { data: { ...snippet, ...data } } });
+    act(() => root.unmount());
+    root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={['/s/other-ref.sh']}>
+          <Route path='/s/:rawRef' component={PublicSnippet} />
+        </MemoryRouter>
+      );
+    });
+  };
+
+  it('shows no notice for a plain share', () => {
+    expect(container.textContent).not.toContain('Link expires');
+    expect(container.textContent).not.toContain('one-time link');
+  });
+
+  it('shows when the link expires', async () => {
+    await renderWith({ shareExpiresAt: new Date(Date.now() + 3 * 3600 * 1000).toISOString() });
+    expect(container.textContent).toContain('Link expires in 3 hours');
+  });
+
+  it('warns that a one-shot link has been used up', async () => {
+    await renderWith({ shareOneShot: true });
+    expect(container.textContent).toContain('This was a one-time link and it has now been used up');
+  });
+});

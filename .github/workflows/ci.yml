@@ -58,6 +58,10 @@ jobs:
       - name: Install system tools
         run: sudo apt-get update && sudo apt-get install -y bubblewrap shellcheck
 
+      # Lockfiles are written by npm 11; older bundled npm on Node 20/22 rejects them
+      - name: Use npm 11
+        run: npm install -g npm@11
+
       - name: Install server dependencies
         run: npm ci
 
@@ -171,6 +175,7 @@ jobs:
             [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors) | Out-Null
             if ($errors.Count) { $errors | Format-List; $failed = $true }
           }
+          if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) { Register-PSRepository -Default }
           Set-PSRepository PSGallery -InstallationPolicy Trusted
           Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force
           $findings = Invoke-ScriptAnalyzer -Path agent -Recurse -Severity Error

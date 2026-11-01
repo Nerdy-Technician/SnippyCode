@@ -11,6 +11,7 @@ import {
   getQuotedPlaceholderReport,
   getSnippetRunner,
   getSnippetVersions,
+  diffSnippetVersion,
   patchSnippetFlags,
   restoreSnippetVersion,
   revokeSnippetRawToken,
@@ -102,6 +103,10 @@ snippetRouter
 snippetRouter
   .route('/:id/versions')
   .get(requireAuth, validateSnippetId, getSnippetVersions);
+
+snippetRouter
+  .route('/:id/versions/:versionId/diff')
+  .get(requireAuth, validateSnippetId, diffSnippetVersion);
 
 snippetRouter
   .route('/:id/versions/:versionId/restore')
