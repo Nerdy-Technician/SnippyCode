@@ -357,6 +357,9 @@ export const terminalView = (session: TerminalSession, since: number): TerminalV
 /** Longest a browser or agent request is held open (callers clamp too). */
 export const MAX_TERMINAL_WAIT_MS = 30_000;
 
+/** Longest the agent's exchange is held (the controller allows 2s). */
+const MAX_AGENT_HOLD_MS = 5_000;
+
 const clampWait = (waitMs: number): number =>
   Number.isFinite(waitMs) ? Math.min(Math.max(Math.floor(waitMs), 0), MAX_TERMINAL_WAIT_MS) : 0;
 
@@ -442,7 +445,9 @@ export const exchangeTerminal = async (
     return instruction;
   };
 
-  if (instructionReady(session) || waitMs <= 0) {
+  // Hold the agent for at most a couple of seconds, whatever it asked for.
+  const holdMs = clampWait(waitMs);
+  if (instructionReady(session) || !(holdMs > 0 && holdMs <= MAX_AGENT_HOLD_MS)) {
     return deliver();
   }
 
@@ -453,7 +458,7 @@ export const exchangeTerminal = async (
       if (index >= 0) session.agentWaiters.splice(index, 1);
       resolve();
     };
-    const timer = setTimeout(finish, clampWait(waitMs));
+    const timer = setTimeout(finish, holdMs);
     session.agentWaiters.push(finish);
   });
 
