@@ -86,6 +86,9 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             client/package-lock.json
+      - name: Use npm 11
+        run: npm install -g npm@11
+
       - name: Install
         run: npm ci --ignore-scripts && npm ci --ignore-scripts --prefix client
       - name: Server licences

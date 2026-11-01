@@ -28,7 +28,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 # Interpreters for server runs, bubblewrap to sandbox them, and linters
-RUN apk add --no-cache bash python3 bubblewrap shellcheck ruff
+RUN apk upgrade --no-cache && apk add --no-cache bash python3 bubblewrap shellcheck ruff
 
 COPY package*.json ./
 # npm is only needed to install; dropping it keeps its bundled dependencies
