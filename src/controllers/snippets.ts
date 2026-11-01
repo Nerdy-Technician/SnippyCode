@@ -56,6 +56,8 @@ import {
   accessibleSiteIds,
   REFERENCE_SOURCES
 } from '../utils';
+import { isShareLive } from '../utils/shareLinks';
+import { diffLines } from '../utils/lineDiff';
 import {
   approvalJson,
   isAdminRole,
@@ -88,6 +90,7 @@ const publicSnippet = (rawSnippet: any, tags?: string[]) => ({
   rawTokenPrefix: rawSnippet.rawTokenPrefix || null,
   rawTokenConfigured: Boolean(rawSnippet.rawTokenHash),
   isPublic: Boolean(rawSnippet.isPublic),
+  ...shareState(rawSnippet),
   tags,
   // Placeholders the save/run rule would refuse (legacy snippets): shown as
   // a warning so the author can remove the quotes around them
@@ -175,10 +178,54 @@ const readVariableValues = (input: unknown): Record<string, string> => {
  * Single source of truth for share visibility. /s/ (via
  * /api/snippets/public/:rawRef) and tokenless /raw/:rawRef both resolve
  * snippets through this lookup, so a snippet is reachable without a token
- * exactly when it is public. There is no share expiry in SnippyCode; add it
- * here if it is ever introduced.
+ * exactly when it is public and its share has not expired (shareExpiresAt
+ * is NULL or in the future). One-shot shares are burned by
+ * consumeOneShotShare after the first successful view.
  */
-const sharedSnippetWhere = (lookup: RawRefLookup) => ({ ...lookup, isPublic: true });
+const sharedSnippetWhere = (lookup: RawRefLookup) => ({
+  ...lookup,
+  isPublic: true,
+  [Op.or]: [{ shareExpiresAt: null }, { shareExpiresAt: { [Op.gt]: new Date() } }]
+});
+
+/**
+ * Burn a one-shot share: make it private in one conditional UPDATE so two
+ * concurrent viewers can never both get it. Returns false when someone else
+ * already consumed it (the caller then answers 404). Non one-shot shares are
+ * left alone and always return true.
+ */
+const consumeOneShotShare = async (
+  snippet: { id: number; shareOneShot?: boolean | null },
+  req: Request
+): Promise<boolean> => {
+  if (!snippet.shareOneShot) {
+    return true;
+  }
+
+  const [count] = await SnippetModel.update(
+    { isPublic: false, shareOneShot: false, shareExpiresAt: null },
+    { where: { id: snippet.id, isPublic: true, shareOneShot: true } }
+  );
+
+  if (count === 0) {
+    return false;
+  }
+
+  await auditLog('snippet.share_consumed', {
+    userId: null,
+    ipAddress: requestIp(req),
+    target: `snippet:${snippet.id}`,
+    metadata: { from: 'public', to: 'private', reason: 'one-shot' }
+  });
+
+  return true;
+};
+
+const shareState = (rawSnippet: { isPublic?: boolean; shareExpiresAt?: Date | string | null; shareOneShot?: boolean }) => ({
+  shareExpiresAt: rawSnippet.isPublic && rawSnippet.shareExpiresAt ? new Date(rawSnippet.shareExpiresAt).toISOString() : null,
+  shareOneShot: Boolean(rawSnippet.isPublic && rawSnippet.shareOneShot),
+  shareExpired: Boolean(rawSnippet.isPublic && !isShareLive(rawSnippet.shareExpiresAt))
+});
 
 const sendPlainText = (res: Response, body: string): void => {
   res
@@ -230,6 +277,9 @@ export const createSnippet = asyncWrapper(
       ...createDefaults,
       ...req.body
     } as Body;
+    // Share expiry and one-shot are only set through PATCH
+    delete (values as { shareExpiresAt?: unknown }).shareExpiresAt;
+    delete (values as { shareOneShot?: unknown }).shareOneShot;
     const parsedRequestTags = tagParser([
       ...requestTags,
       values.language.toLowerCase()
@@ -372,6 +422,9 @@ export const updateSnippet = asyncWrapper(
     // The dangerous flag has its own endpoint (only admins may clear it)
     const body = { ...req.body };
     delete body.dangerous;
+    // Share expiry and one-shot are only changed through PATCH
+    delete body.shareExpiresAt;
+    delete body.shareOneShot;
     // Only admins may mark a variable raw (inserted unquoted). A non-admin
     // save keeps an admin's raw flags only while the code is unchanged;
     // otherwise they are dropped and those values are quoted again
@@ -528,8 +581,17 @@ export const patchSnippetFlags = asyncWrapper(
     }
 
     const wasPublic = Boolean(snippet.isPublic);
-    const changes = <{ isPinned?: number; isPublic?: boolean; dangerous?: boolean }>{ ...req.body };
+    const changes = <
+      { isPinned?: number; isPublic?: boolean; dangerous?: boolean; shareExpiresAt?: Date | null; shareOneShot?: boolean }
+    >{ ...req.body };
     delete changes.dangerous;
+
+    // Making a snippet private clears its share options, so publishing it
+    // again later starts from a plain, non-expiring share
+    if (changes.isPublic === false) {
+      changes.shareExpiresAt = null;
+      changes.shareOneShot = false;
+    }
 
     await snippet.update(changes);
 
@@ -611,6 +673,11 @@ export const getRawCode = asyncWrapper(
     const snippet = tokenMatch || shared;
 
     if (!snippet) {
+      return notFound();
+    }
+
+    // A tokenless fetch of a one-shot share burns it
+    if (!tokenMatch && shared && !(await consumeOneShotShare(shared, req))) {
       return notFound();
     }
 
@@ -696,7 +763,7 @@ export const getPublicSnippet = asyncWrapper(
         })
       : null;
 
-    if (!snippet) {
+    if (!snippet || !(await consumeOneShotShare(snippet, req))) {
       return next(new ErrorResponse(404, 'Public snippet was not found'));
     }
 
@@ -717,6 +784,9 @@ export const getPublicSnippet = asyncWrapper(
         rawSlug: rawSnippet.rawSlug,
         tags: rawSnippet.tags?.map(tag => tag.name) || [],
         updatedAt: rawSnippet.updatedAt,
+        shareExpiresAt: rawSnippet.shareExpiresAt ? new Date(rawSnippet.shareExpiresAt).toISOString() : null,
+        // A one-shot share is already burned by the time this is sent
+        shareOneShot: Boolean(rawSnippet.shareOneShot),
         rawUrl,
         powerShellCommand: isPowerShellLanguage(rawSnippet.language)
           ? buildPowerShellRemoteCommand(rawUrl)
@@ -1125,6 +1195,64 @@ export const getSnippetVersions = asyncWrapper(
     });
 
     res.status(200).json({ data: versions });
+  }
+);
+
+/**
+ * @description Line diff between a version and the current snippet, or
+ * between two versions (?against=<versionId>). `from` is the older side.
+ * @route /api/snippets/:id/versions/:versionId/diff
+ * @request GET
+ */
+export const diffSnippetVersion = asyncWrapper(
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const snippetId = Number(req.params.id);
+    const versionId = Number(req.params.versionId);
+    const against = String(req.query.against || 'current');
+    const isPositiveId = (value: number) => Number.isSafeInteger(value) && value > 0;
+
+    if (!isPositiveId(versionId)) {
+      return next(new ErrorResponse(400, 'Version id must be a positive integer'));
+    }
+
+    if (against !== 'current' && !/^[1-9][0-9]*$/.test(against)) {
+      return next(new ErrorResponse(400, 'against must be "current" or a version id'));
+    }
+
+    const snippet = await SnippetModel.findByPk(snippetId, { raw: true });
+
+    if (!snippet) {
+      return next(new ErrorResponse(404, `Snippet with id of ${snippetId} was not found`));
+    }
+
+    const version = await SnippetVersionModel.findOne({ where: { id: versionId, snippetId }, raw: true });
+    const other =
+      against === 'current'
+        ? null
+        : await SnippetVersionModel.findOne({ where: { id: Number(against), snippetId }, raw: true });
+
+    if (!version || (against !== 'current' && !other)) {
+      return next(new ErrorResponse(404, 'Snippet version was not found'));
+    }
+
+    const target = other || snippet;
+    const diff = diffLines(version.code, target.code);
+
+    res.status(200).json({
+      data: {
+        from: { versionId: version.id, title: version.title, language: version.language, createdAt: version.createdAt },
+        to: other
+          ? { versionId: other.id, title: other.title, language: other.language, createdAt: other.createdAt }
+          : { versionId: null, title: snippet.title, language: snippet.language, createdAt: snippet.updatedAt },
+        changed: {
+          title: version.title !== target.title,
+          language: version.language !== target.language,
+          description: (version.description || '') !== (target.description || ''),
+          docs: (version.docs || '') !== (target.docs || '')
+        },
+        ...diff
+      }
+    });
   }
 );
 

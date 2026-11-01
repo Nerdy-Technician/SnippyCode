@@ -1,6 +1,7 @@
 import { cleanVariableDefinitions } from '../utils/snippetVariables';
 import { Request, Response, NextFunction } from 'express';
 import { ErrorResponse } from '../utils';
+import { parseShareExpiry } from '../utils/shareLinks';
 
 const MAX = {
   title: 120,
@@ -140,19 +141,18 @@ export const validateSnippetFlags = (
   res: Response,
   next: NextFunction
 ): void => {
-  const { isPinned, isPublic } = req.body || {};
-  const unknownKeys = Object.keys(req.body || {}).filter(
-    key => !['isPinned', 'isPublic'].includes(key)
-  );
+  const { isPinned, isPublic, shareExpiresAt, shareOneShot } = req.body || {};
+  const allowed = ['isPinned', 'isPublic', 'shareExpiresAt', 'shareOneShot'];
+  const unknownKeys = Object.keys(req.body || {}).filter(key => !allowed.includes(key));
 
   if (unknownKeys.length > 0) {
     return next(
-      new ErrorResponse(400, `Only isPinned and isPublic can be patched; got ${unknownKeys.join(', ')}`)
+      new ErrorResponse(400, `Only ${allowed.join(', ')} can be patched; got ${unknownKeys.join(', ')}`)
     );
   }
 
-  if (isPinned === undefined && isPublic === undefined) {
-    return next(new ErrorResponse(400, 'Send isPinned and/or isPublic'));
+  if ([isPinned, isPublic, shareExpiresAt, shareOneShot].every(value => value === undefined)) {
+    return next(new ErrorResponse(400, `Send at least one of ${allowed.join(', ')}`));
   }
 
   if (isPinned !== undefined && !isBooleanLike(isPinned)) {
@@ -163,7 +163,19 @@ export const validateSnippetFlags = (
     return next(new ErrorResponse(400, 'Public state must be true or false'));
   }
 
-  const body: { isPinned?: number; isPublic?: boolean } = {};
+  if (shareOneShot !== undefined && !isBooleanLike(shareOneShot)) {
+    return next(new ErrorResponse(400, 'One-shot share must be true or false'));
+  }
+
+  const expiry = shareExpiresAt === undefined ? undefined : parseShareExpiry(shareExpiresAt);
+
+  if (expiry && !expiry.ok) {
+    return next(
+      new ErrorResponse(400, 'Share expiry must be null or an ISO date in the future, at most one year out')
+    );
+  }
+
+  const body: { isPinned?: number; isPublic?: boolean; shareExpiresAt?: Date | null; shareOneShot?: boolean } = {};
 
   if (isPinned !== undefined) {
     body.isPinned = isPinned ? 1 : 0;
@@ -171,6 +183,14 @@ export const validateSnippetFlags = (
 
   if (isPublic !== undefined) {
     body.isPublic = Boolean(isPublic);
+  }
+
+  if (expiry && expiry.ok) {
+    body.shareExpiresAt = expiry.value;
+  }
+
+  if (shareOneShot !== undefined) {
+    body.shareOneShot = Boolean(shareOneShot);
   }
 
   req.body = body;

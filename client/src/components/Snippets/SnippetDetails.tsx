@@ -53,6 +53,9 @@ export const SnippetDetails = (props: Props): JSX.Element => {
     collection,
     fileName,
     isPublic,
+    shareExpiresAt,
+    shareOneShot,
+    shareExpired,
     dangerous,
     quotedPlaceholders,
     usage,
@@ -202,6 +205,46 @@ export const SnippetDetails = (props: Props): JSX.Element => {
     patchSnippetFlags(id, { isPublic: nextPublic });
   };
 
+  const setShareExpiry = (value: string) => {
+    if (!canEdit) {
+      return;
+    }
+
+    const hours = Number(value);
+    patchSnippetFlags(id, {
+      shareExpiresAt: hours > 0 ? new Date(Date.now() + hours * 3600 * 1000).toISOString() : null
+    });
+  };
+
+  const toggleOneShot = () => {
+    if (!canEdit) {
+      return;
+    }
+
+    if (
+      !shareOneShot &&
+      !window.confirm(
+        'One-shot link: the first person to open /s/ or fetch /raw without a token burns it, and the snippet goes back to private.'
+      )
+    ) {
+      return;
+    }
+
+    patchSnippetFlags(id, { shareOneShot: !shareOneShot });
+  };
+
+  const shareStatus = !isPublic
+    ? 'Private'
+    : shareExpired
+      ? 'Public (link expired)'
+      : [
+          'Public',
+          shareOneShot ? 'one-shot' : '',
+          shareExpiresAt ? `expires ${dateParser(shareExpiresAt).relative}` : ''
+        ]
+          .filter(Boolean)
+          .join(' · ');
+
   const generateRawToken = async () => {
     const res = await axios.post<
       Response<{
@@ -279,8 +322,42 @@ export const SnippetDetails = (props: Props): JSX.Element => {
 
       <div className='metric-row'>
         <span>Visibility</span>
-        <span className='fw-bold'>{isPublic ? 'Public' : 'Private'}</span>
+        <span className='fw-bold' data-testid='share-status'>{shareStatus}</span>
       </div>
+
+      {isPublic && canEdit && (
+        <div className='metric-row share-options'>
+          <label htmlFor={`share-expiry-${id}`}>Link expires</label>
+          <div className='share-options-controls'>
+            <select
+              id={`share-expiry-${id}`}
+              className='form-select form-select-sm'
+              value=''
+              onChange={e => setShareExpiry(e.target.value)}
+            >
+              <option value='' disabled>
+                {shareExpiresAt
+                  ? `${shareExpired ? 'Expired' : 'At'} ${new Date(shareExpiresAt).toLocaleString()}`
+                  : 'Never'}
+              </option>
+              <option value='0'>Never</option>
+              <option value='1'>In 1 hour</option>
+              <option value='24'>In 24 hours</option>
+              <option value='168'>In 7 days</option>
+              <option value='720'>In 30 days</option>
+            </select>
+            <label className='form-check-label share-one-shot'>
+              <input
+                type='checkbox'
+                className='form-check-input me-1'
+                checked={Boolean(shareOneShot)}
+                onChange={toggleOneShot}
+              />
+              One-shot
+            </label>
+          </div>
+        </div>
+      )}
 
       {quotedPlaceholders && quotedPlaceholders.length > 0 && (
         <div className='alert alert-warning small' role='alert'>

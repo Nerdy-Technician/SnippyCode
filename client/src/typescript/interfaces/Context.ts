@@ -20,7 +20,7 @@ export interface Context {
   updateSnippet: (snippet: NewSnippet, id: number, isLocal?: boolean) => void;
   patchSnippetFlags: (
     id: number,
-    flags: { isPinned?: boolean; isPublic?: boolean }
+    flags: { isPinned?: boolean; isPublic?: boolean; shareExpiresAt?: string | null; shareOneShot?: boolean }
   ) => void;
   deleteSnippet: (id: number) => void;
   duplicateSnippet: (id: number) => void;

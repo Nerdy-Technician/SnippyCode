@@ -319,4 +319,128 @@ describe('share links and raw endpoint', { skip }, () => {
       400
     );
   });
+
+  test('share expiry: future expiry resolves, past expiry is a 404 on /s/ and /raw', async () => {
+    const snippet = await createSnippet({ title: 'Expiring share', language: 'bash', code: 'echo expiring', isPublic: true });
+    const slug = snippet.rawSlug;
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+    const patched = await request('PATCH', `/api/snippets/${snippet.id}`, { body: { shareExpiresAt: future } });
+    assert.equal(patched.status, 200, patched.text);
+    assert.equal(patched.json().data.shareExpiresAt, future);
+    assert.equal(patched.json().data.shareExpired, false);
+
+    const pub = await request('GET', `/api/snippets/public/${slug}`, { auth: false });
+    assert.equal(pub.status, 200);
+    assert.equal(pub.json().data.shareExpiresAt, future);
+    assert.equal((await request('GET', `/raw/${slug}`, { auth: false })).status, 200);
+
+    // Simulate the clock passing the expiry
+    await db.sequelize.query(`UPDATE snippets SET "shareExpiresAt" = NOW() - INTERVAL '1 minute' WHERE id = ${snippet.id}`);
+    assert.equal((await request('GET', `/api/snippets/public/${slug}`, { auth: false })).status, 404);
+    assert.equal((await request('GET', `/raw/${slug}`, { auth: false })).status, 404);
+    assert.equal((await request('GET', `/s/${slug}`, { auth: false })).status, 200, '/s/ still serves the SPA shell');
+
+    // The owner sees it as expired, and the snippet token still works
+    const owner = await request('GET', `/api/snippets/${snippet.id}`);
+    assert.equal(owner.json().data.shareExpired, true);
+
+    // Clearing the expiry brings the share back
+    const cleared = await request('PATCH', `/api/snippets/${snippet.id}`, { body: { shareExpiresAt: null } });
+    assert.equal(cleared.json().data.shareExpiresAt, null);
+    assert.equal((await request('GET', `/api/snippets/public/${slug}`, { auth: false })).status, 200);
+  });
+
+  test('share expiry validation rejects past and malformed dates', async () => {
+    const snippet = await createSnippet({ title: 'Bad expiry', language: 'bash', code: 'true', isPublic: true });
+    for (const shareExpiresAt of [new Date(Date.now() - 1000).toISOString(), 'tomorrow', 5]) {
+      const res = await request('PATCH', `/api/snippets/${snippet.id}`, { body: { shareExpiresAt } });
+      assert.equal(res.status, 400, String(shareExpiresAt));
+    }
+    assert.equal((await request('PATCH', `/api/snippets/${snippet.id}`, { body: { shareOneShot: 'yes' } })).status, 400);
+  });
+
+  test('a one-shot share is burned by the first anonymous view', async () => {
+    const snippet = await createSnippet({ title: 'One shot share', language: 'bash', code: 'echo once', isPublic: true });
+    const slug = snippet.rawSlug;
+
+    const patched = await request('PATCH', `/api/snippets/${snippet.id}`, { body: { shareOneShot: true } });
+    assert.equal(patched.json().data.shareOneShot, true);
+
+    const first = await request('GET', `/api/snippets/public/${slug}`, { auth: false });
+    assert.equal(first.status, 200);
+    assert.equal(first.json().data.code, 'echo once');
+    assert.equal(first.json().data.shareOneShot, true);
+
+    assert.equal((await request('GET', `/api/snippets/public/${slug}`, { auth: false })).status, 404);
+    assert.equal((await request('GET', `/raw/${slug}`, { auth: false })).status, 404);
+
+    const owner = await request('GET', `/api/snippets/${snippet.id}`);
+    assert.equal(owner.json().data.isPublic, false);
+    assert.equal(owner.json().data.shareOneShot, false);
+
+    const [rows] = await db.sequelize.query(
+      `SELECT action FROM audit_logs WHERE target = 'snippet:${snippet.id}' AND action = 'snippet.share_consumed'`
+    );
+    assert.equal(rows.length, 1);
+  });
+
+  test('a one-shot share burns on tokenless /raw too, and concurrent views get it once', async () => {
+    const snippet = await createSnippet({ title: 'One shot raw', language: 'bash', code: 'echo raw-once', isPublic: true });
+    await request('PATCH', `/api/snippets/${snippet.id}`, { body: { shareOneShot: true } });
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => request('GET', `/raw/${snippet.rawSlug}`, { auth: false }))
+    );
+    assert.equal(results.filter(r => r.status === 200).length, 1);
+    assert.equal(results.filter(r => r.status === 404).length, 4);
+  });
+
+  test('making a snippet private clears share options; PUT cannot set them', async () => {
+    const snippet = await createSnippet({ title: 'Share reset', language: 'bash', code: 'true', isPublic: true, shareOneShot: true });
+    assert.equal(snippet.shareOneShot, false, 'POST ignores shareOneShot');
+
+    const future = new Date(Date.now() + 3600_000).toISOString();
+    await request('PATCH', `/api/snippets/${snippet.id}`, { body: { shareOneShot: true, shareExpiresAt: future } });
+    const privateRes = await request('PATCH', `/api/snippets/${snippet.id}`, { body: { isPublic: false } });
+    assert.equal(privateRes.json().data.shareOneShot, false);
+    assert.equal(privateRes.json().data.shareExpiresAt, null);
+
+    const republished = await request('PATCH', `/api/snippets/${snippet.id}`, { body: { isPublic: true } });
+    assert.equal(republished.json().data.shareOneShot, false);
+  });
+
+  test('version diff compares a version with the current snippet or another version', async () => {
+    const snippet = await createSnippet({ title: 'Versioned', language: 'bash', code: 'echo one\necho two' });
+    const put = (code: string) =>
+      request('PUT', `/api/snippets/${snippet.id}`, { body: { title: 'Versioned', language: 'bash', code } });
+    assert.equal((await put('echo one\necho 2')).status, 200);
+    assert.equal((await put('echo one\necho 2\necho three')).status, 200);
+
+    const versions = (await request('GET', `/api/snippets/${snippet.id}/versions`)).json().data;
+    assert.equal(versions.length, 2);
+    const [newer, older] = versions;
+
+    const vsCurrent = await request('GET', `/api/snippets/${snippet.id}/versions/${older.id}/diff`);
+    assert.equal(vsCurrent.status, 200, vsCurrent.text);
+    assert.equal(vsCurrent.json().data.to.versionId, null);
+    assert.equal(vsCurrent.json().data.added, 2);
+    assert.equal(vsCurrent.json().data.removed, 1);
+
+    const between = await request('GET', `/api/snippets/${snippet.id}/versions/${older.id}/diff?against=${newer.id}`);
+    assert.equal(between.json().data.to.versionId, newer.id);
+    assert.equal(between.json().data.added, 1);
+    assert.equal(between.json().data.removed, 1);
+
+    assert.equal((await request('GET', `/api/snippets/${snippet.id}/versions/${older.id}/diff?against=x`)).status, 400);
+    assert.equal((await request('GET', `/api/snippets/${snippet.id}/versions/999999/diff`)).status, 404);
+    assert.equal((await request('GET', `/api/snippets/${snippet.id}/versions/${older.id}/diff`, { auth: false })).status, 401);
+
+    // Rollback through the existing restore endpoint, then the diff is empty
+    const restored = await request('POST', `/api/snippets/${snippet.id}/versions/${older.id}/restore`);
+    assert.equal(restored.status, 200);
+    assert.equal(restored.json().data.code, 'echo one\necho two');
+    const after = await request('GET', `/api/snippets/${snippet.id}/versions/${older.id}/diff`);
+    assert.equal(after.json().data.added + after.json().data.removed, 0);
+  });
 });
