@@ -97,6 +97,15 @@ export const SnippetModel = sequelize.define<SnippetInstance>(
       allowNull: false,
       defaultValue: false
     },
+    shareExpiresAt: {
+      type: DATE,
+      allowNull: true
+    },
+    shareOneShot: {
+      type: BOOLEAN,
+      allowNull: false,
+      defaultValue: false
+    },
     createdAt: {
       type: DATE
     },

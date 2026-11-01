@@ -119,3 +119,36 @@ export const buildRawUrl = (baseUrl: string, rawRef: string): string =>
 
 export const buildPowerShellRemoteCommand = (rawUrl: string): string =>
   `irm ${rawUrl} | iex`;
+
+/** A share link may expire at most this far in the future (one year). */
+export const MAX_SHARE_EXPIRY_MS = 366 * 24 * 60 * 60 * 1000;
+
+/**
+ * Parse a share expiry from a request body.
+ * null or '' clears the expiry; an ISO date must be in the future and at most
+ * one year out. Returns { ok: false } for anything else.
+ */
+export const parseShareExpiry = (
+  value: unknown,
+  now: number = Date.now()
+): { ok: true; value: Date | null } | { ok: false } => {
+  if (value === null || value === '') {
+    return { ok: true, value: null };
+  }
+
+  if (typeof value !== 'string' || value.length > 64) {
+    return { ok: false };
+  }
+
+  const time = Date.parse(value);
+
+  if (!Number.isFinite(time) || time <= now || time - now > MAX_SHARE_EXPIRY_MS) {
+    return { ok: false };
+  }
+
+  return { ok: true, value: new Date(time) };
+};
+
+/** True when a share with this expiry is still live at `now`. */
+export const isShareLive = (expiresAt: Date | string | null | undefined, now: number = Date.now()): boolean =>
+  !expiresAt || new Date(expiresAt).getTime() > now;

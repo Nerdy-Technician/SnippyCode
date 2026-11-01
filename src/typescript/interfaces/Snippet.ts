@@ -16,10 +16,12 @@ export interface Snippet extends Model {
   collection: string;
   fileName?: string | null;
   isPublic: boolean;
+  shareExpiresAt?: Date | null;
+  shareOneShot?: boolean;
   variables: VariableDefinition[];
   dangerous: boolean;
   tags?: { name: string }[];
 }
 
 export interface SnippetCreationAttributes
-  extends Optional<Snippet, 'id' | 'createdAt' | 'updatedAt' | 'rawTokenHash' | 'rawTokenPrefix' | 'rawTokenCreatedAt' | 'rawSlug' | 'collection' | 'fileName' | 'isPublic' | 'variables' | 'dangerous'> {}
+  extends Optional<Snippet, 'id' | 'createdAt' | 'updatedAt' | 'rawTokenHash' | 'rawTokenPrefix' | 'rawTokenCreatedAt' | 'rawSlug' | 'collection' | 'fileName' | 'isPublic' | 'shareExpiresAt' | 'shareOneShot' | 'variables' | 'dangerous'> {}
