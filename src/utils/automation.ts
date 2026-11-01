@@ -2,7 +2,7 @@
  * Shared automation: queueing work for device agents, finishing jobs, running
  * runbook steps (by hand or unattended), and closing out schedule runs.
  */
-import { Op } from 'sequelize';
+import { Op, Transaction } from 'sequelize';
 import {
   AgentJobInstance,
   AgentJobModel,
@@ -23,7 +23,7 @@ import {
 import { decryptSecret, encryptSecret, maskSecrets } from './secretBox';
 import { renderSnippetFor, runAndRecord } from './snippetRender';
 import { isSnippetRunEnabled, snippetRunLanguages } from './runSnippet';
-import { emitEvent } from './notify';
+import { emitEvent, trackNotification } from './notify';
 import { recordSnippetUsage } from './snippetUsage';
 import { deviceVariableValues } from './deviceFields';
 import {
@@ -64,10 +64,16 @@ const tail = (text: string, length = 600): string =>
  * Announce a finished run, unless a schedule will report it as part of its
  * summary.
  */
-export const announceRun = async (run: SnippetRunInstance): Promise<void> => {
+export const announceRun = (run: SnippetRunInstance): Promise<void> => {
   if (run.scheduleRunId) {
-    return;
+    return Promise.resolve();
   }
+  const job = sendRunAnnouncement(run);
+  trackNotification(job);
+  return job;
+};
+
+const sendRunAnnouncement = async (run: SnippetRunInstance): Promise<void> => {
 
   const [site, user] = await Promise.all([
     run.siteId ? SiteModel.findByPk(run.siteId) : null,
@@ -159,6 +165,39 @@ export const queueToolJob = async (options: {
     kind: 'tool',
     tool: options.tool
   });
+};
+
+/**
+ * Queue an interactive terminal. The payload is a shell= / user= spec, not a
+ * script, and one-shot jobs never use the pty language.
+ */
+export const queuePtyJob = async (options: {
+  device: DeviceInstance;
+  code: string;
+  title: string;
+  userId?: number | null;
+  transaction?: Transaction;
+}): Promise<AgentJobInstance> => {
+  if (options.device.clonePendingApproval) {
+    throw new Error(`${options.device.name} is waiting for clone approval`);
+  }
+
+  return AgentJobModel.create(
+    {
+      deviceId: options.device.id,
+      siteId: options.device.siteId,
+      snippetId: null,
+      snippetTitle: options.title.slice(0, 255),
+      userId: options.userId || null,
+      language: 'pty',
+      payload: encryptSecret(options.code),
+      secretValues: '',
+      timeoutMs: AGENT_MAX_TIMEOUT_MS,
+      kind: 'tool',
+      tool: 'shell'
+    },
+    { transaction: options.transaction }
+  );
 };
 
 const summarize = (tool: ReadTool, data: any): string => {

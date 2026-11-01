@@ -213,7 +213,7 @@ describe('agent auto-update', { skip }, () => {
 
   test('U2: the signature covers file, platform, arch, version, sha256 and the downgrade flag', () => {
     const m = manifest();
-    assert.equal(m.version, '1.4.0');
+    assert.equal(m.version, '1.5.0');
     const pub = createPublicKey(readFileSync(join(keys, 'agent-signing.pub.pem')));
     const entry = m.files['snippycode-agent.sh'];
     const msg = (patch: Record<string, unknown> = {}) =>
@@ -231,7 +231,7 @@ describe('agent auto-update', { skip }, () => {
     const sh = join(out, 'snippycode-agent.sh');
     const good = release.signedMessage({ file: 'snippycode-agent.sh', version: m.version, ...entry });
     assert.equal(agentVerify(sh, good, entry.signature), true);
-    assert.equal(agentVerify(sh, good.replace('version=1.4.0', 'version=0.9.0'), entry.signature), false, 'version lie');
+    assert.equal(agentVerify(sh, good.replace(`version=${m.version}`, 'version=0.9.0'), entry.signature), false, 'version lie');
     assert.equal(agentVerify(sh, good.replace('downgrade=0', 'downgrade=1'), entry.signature), false, 'downgrade lie');
     // An agent with a standby key accepts releases signed by either key
     const next = mkdtempSync(join(tmpdir(), 'sc-next-'));
@@ -246,7 +246,7 @@ describe('agent auto-update', { skip }, () => {
 
   test('U3: the server refuses tampered, wrongly signed, or (in production) unverifiable releases', () => {
     release.clearReleaseCache();
-    assert.equal(release.loadRelease()?.version, '1.4.0');
+    assert.equal(release.loadRelease()?.version, '1.5.0');
     const original = readFileSync(join(out, 'snippycode-agent.sh'));
     writeFileSync(join(out, 'snippycode-agent.sh'), Buffer.concat([original, Buffer.from('\n# changed\n')]));
     release.clearReleaseCache();
@@ -264,7 +264,7 @@ describe('agent auto-update', { skip }, () => {
     process.env.NODE_ENV = 'test';
     process.env.AGENT_UPDATE_PUBLIC_KEYS = saved;
     release.clearReleaseCache();
-    assert.equal(release.loadRelease()?.version, '1.4.0');
+    assert.equal(release.loadRelease()?.version, '1.5.0');
   });
 
   test('rollout rules: pins (with signed downgrade), stages, percentage, Windows never', () => {

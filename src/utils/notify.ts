@@ -222,6 +222,20 @@ const post = (
 const RETRY_DELAYS_MS = [0, 2000, 10000];
 const inFlight = new Set<Promise<void>>();
 
+/**
+ * Count work that will emit a notification as in flight, so a caller that
+ * fires and forgets (and then looks up the site or user) is still covered by
+ * flushNotifications.
+ */
+export const trackNotification = (job: Promise<unknown>): void => {
+  const settled = job.then(
+    () => undefined,
+    () => undefined
+  );
+  inFlight.add(settled);
+  void settled.finally(() => inFlight.delete(settled));
+};
+
 /** Wait for queued deliveries (used by tests and graceful shutdown). */
 export const flushNotifications = async (): Promise<void> => {
   while (inFlight.size) {

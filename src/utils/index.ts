@@ -27,6 +27,7 @@ export * from './scheduler';
 export * from './lint';
 export * from './backup';
 export * from './deviceTools';
+export * from './terminalSession';
 export * from './deviceFields';
 export * from './monitoring';
 export * from './tokenHash';

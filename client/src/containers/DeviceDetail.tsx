@@ -1249,7 +1249,20 @@ export const DeviceDetail = (): JSX.Element => {
         ) : tab === 'shell' ? (
           <Card classes='variables-card'>
             {device.canAct ? (
-              <TerminalTab name={device.name} windows={device.toolOs === 'windows'} online={device.online} runTool={runTool} busy={Boolean(busy.terminal)} />
+              <TerminalTab
+                deviceId={device.id}
+                name={device.name}
+                windows={device.toolOs === 'windows'}
+                online={device.online}
+                capabilities={device.capabilities || []}
+                agentVersion={device.agentVersion || ''}
+                suggestedUsers={(device.inventory?.system?.data?.users || '')
+                  .split(',')
+                  .map(item => item.trim())
+                  .filter(Boolean)}
+                runTool={runTool}
+                busy={Boolean(busy.terminal)}
+              />
             ) : (
               <p className='text-muted mb-0'>Only admins (or editors, if allowed) can run commands on devices.</p>
             )}

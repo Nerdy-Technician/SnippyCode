@@ -3,7 +3,7 @@ import { join } from 'path';
 import { existsSync } from 'fs';
 import express, { Express, Request, Response } from 'express';
 import cookieParser from 'cookie-parser';
-import { apiRateLimit, csrfProtection, errorHandler, requireAuth, securityHeaders } from './middleware';
+import { apiRateLimit, csrfProtection, terminalRateLimit, errorHandler, requireAuth, securityHeaders } from './middleware';
 
 // Routers
 import { snippetRouter } from './routes/snippets';
@@ -59,6 +59,7 @@ export const createApp = (options: AppOptions = {}): Express => {
 
   // Routes
   app.use('/api', apiRateLimit);
+  app.use('/api/devices/:id/terminal/session', terminalRateLimit);
   app.use('/raw', apiRateLimit);
   app.use('/agent', apiRateLimit);
   app.use('/api/auth', authRouter);

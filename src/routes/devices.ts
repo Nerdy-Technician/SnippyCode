@@ -36,6 +36,15 @@ import {
   getDeviceMetrics,
   getJobFile
 } from '../controllers/devices';
+import {
+  closeTerminal,
+  exchangeAgentTerminal,
+  getTerminalSession,
+  openTerminalSession,
+  signalTerminalSession,
+  switchTerminalUser,
+  writeTerminalInput
+} from '../controllers/terminal';
 import { enrollIpRateLimit, enrollTokenRateLimit, requireAuth, requireOwner, requireMinimumRole } from '../middleware';
 
 export const deviceRouter = Router();
@@ -69,6 +78,11 @@ deviceRouter.route('/:id/remote').put(updateDeviceRemote);
 deviceRouter.route('/:id/remote/password').get(revealRemotePassword);
 deviceRouter.route('/:id/remote.rdp').get(downloadRdpFile);
 deviceRouter.route('/:id/metrics').get(getDeviceMetrics);
+deviceRouter.route('/:id/terminal/session').get(getTerminalSession).post(openTerminalSession);
+deviceRouter.route('/:id/terminal/session/input').post(writeTerminalInput);
+deviceRouter.route('/:id/terminal/session/signal').post(signalTerminalSession);
+deviceRouter.route('/:id/terminal/session/user').post(switchTerminalUser);
+deviceRouter.route('/:id/terminal/session/close').post(closeTerminal);
 
 // Endpoints the agent calls with its device token
 export const agentRouter = Router();
@@ -86,6 +100,7 @@ agentRouter.route('/update').get(requireAgent, getAgentUpdate);
 // Health check for a freshly updated agent: token works, server reachable
 agentRouter.route('/ping').get(requireAgent, (_req, res) => res.status(204).end());
 agentRouter.route('/update-result').post(requireAgent, submitUpdateResult);
+agentRouter.route('/jobs/:id/tty').post(requireAgent, exchangeAgentTerminal);
 agentRouter
   .route('/jobs/:id/result')
   .post(

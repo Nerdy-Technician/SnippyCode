@@ -605,14 +605,19 @@ if ($result.ResultCode -gt 3) { exit 1 }
     const cwd = typeof args.cwd === 'string' ? args.cwd : '';
     // eslint-disable-next-line no-control-regex -- rejects NUL bytes on purpose
     need(!cwd || (cwd.length < 1024 && !/[\r\n\x00]/.test(cwd)), 'Invalid folder');
+    // cmd expands % and ! inside quotes, and a quote in the folder would break out of cd /d "..."
+    if (args.terminal && shell === 'cmd' && cwd && /[%!^&|<>"]/.test(cwd)) {
+      throw new ToolError('That folder cannot be used as a cmd working directory');
+    }
 
-    // Terminal mode: start in the last folder and report where we ended up
+    // One command, stdin closed by the agent. Interactive prompts use a pty session instead.
+    // Terminal mode also reports the folder we ended in, and keeps the command's exit code.
     const wrapped = !args.terminal
       ? code
       : shell === 'cmd'
-      ? `@echo off\r\n${cwd ? `cd /d "${cwd.replace(/"/g, '')}" 2>nul\r\n` : ''}${code}\r\necho.\r\necho ${CWD_MARKER}%CD%\r\n`
+      ? `@echo off\r\n${cwd ? `cd /d "${cwd.replace(/"/g, '')}" 2>nul\r\n` : ''}${code}\r\nset __RC=%ERRORLEVEL%\r\necho.\r\necho ${CWD_MARKER}%CD%\r\nexit /b %__RC%\r\n`
       : os === 'windows'
-      ? `${cwd ? `Set-Location -LiteralPath ${psQuote(cwd)} -ErrorAction SilentlyContinue\n` : ''}${code}\n"\n${CWD_MARKER}$((Get-Location).Path)"\n`
+      ? `${cwd ? `Set-Location -LiteralPath ${psQuote(cwd)} -ErrorAction SilentlyContinue\n` : ''}$LASTEXITCODE = $null\n${code}\n$__rc = 0\nif ($null -ne $LASTEXITCODE) { $__rc = $LASTEXITCODE } elseif (-not $?) { $__rc = 1 }\n"\n${CWD_MARKER}$((Get-Location).Path)"\nexit $__rc\n`
       : `${cwd ? `cd -- ${shQuoteAny(cwd)} 2>/dev/null || cd /\n` : ''}${code}\n__rc=$?\nprintf '\\n${CWD_MARKER}%s\\n' "$PWD"\nexit $__rc\n`;
 
     return {
