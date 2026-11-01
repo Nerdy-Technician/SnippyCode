@@ -33,6 +33,8 @@ interface PublicSnippetData {
   rawSlug?: string | null;
   tags: string[];
   updatedAt: Date;
+  shareExpiresAt?: string | null;
+  shareOneShot?: boolean;
 }
 
 export const PublicSnippet = (): JSX.Element => {
@@ -56,7 +58,7 @@ export const PublicSnippet = (): JSX.Element => {
         `/api/snippets/public/${encodeURIComponent(rawRef)}`
       )
       .then(res => setSnippet(res.data.data))
-      .catch(() => setError('This snippet is not public, or it does not exist.'));
+      .catch(() => setError('This snippet is not public, the link has expired or was already used, or it does not exist.'));
   }, [rawRef]);
 
   return (
@@ -114,7 +116,15 @@ export const PublicSnippet = (): JSX.Element => {
               </div>
               <p className='form-text mb-0 mt-3'>
                 Updated {dateParser(snippet.updatedAt).relative}
+                {snippet.shareExpiresAt &&
+                  ` · Link expires ${dateParser(snippet.shareExpiresAt).relative}`}
               </p>
+              {snippet.shareOneShot && (
+                <div className='alert alert-warning small mt-3 mb-0' role='alert'>
+                  This was a one-time link and it has now been used up. Copy anything you
+                  need before leaving this page; the raw link below will no longer work.
+                </div>
+              )}
             </Card>
           </div>
           <div className='col-12 col-lg-4'>

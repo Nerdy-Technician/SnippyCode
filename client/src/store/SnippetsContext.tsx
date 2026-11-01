@@ -185,7 +185,7 @@ export const SnippetsContextProvider = (props: Props): JSX.Element => {
    */
   const patchSnippetFlags = (
     id: number,
-    flags: { isPinned?: boolean; isPublic?: boolean }
+    flags: { isPinned?: boolean; isPublic?: boolean; shareExpiresAt?: string | null; shareOneShot?: boolean }
   ): void => {
     axios
       .patch<Response<Snippet>>(`/api/snippets/${id}`, flags)

@@ -3,7 +3,7 @@ import { DiffEditor } from '@monaco-editor/react';
 import axios from 'axios';
 import copy from 'clipboard-copy';
 import { AuthContext } from '../../store';
-import { Response, Snippet, SnippetVersion } from '../../typescript/interfaces';
+import { Response, Snippet, SnippetVersion, SnippetVersionDiff } from '../../typescript/interfaces';
 import { dateParser, canEditSnippets } from '../../utils';
 
 interface Props {
@@ -22,8 +22,25 @@ export const SnippetHistory = (props: Props): JSX.Element => {
   const [loading, setLoading] = useState(true);
   const [restoring, setRestoring] = useState(false);
   const [error, setError] = useState('');
+  const [against, setAgainst] = useState<'current' | number>('current');
+  const [diff, setDiff] = useState<SnippetVersionDiff | null>(null);
 
   const selected = versions.find(version => version.id === selectedId) || null;
+  const compareTo = against === 'current' ? null : versions.find(version => version.id === against) || null;
+  const modifiedCode = compareTo ? compareTo.code : snippet.code;
+  const modifiedLabel = compareTo ? dateParser(compareTo.createdAt).relative : 'Current';
+
+  useEffect(() => {
+    setDiff(null);
+    if (!selected) {
+      return;
+    }
+    const query = against === 'current' ? '' : `?against=${against}`;
+    axios
+      .get<Response<SnippetVersionDiff>>(`/api/snippets/${snippet.id}/versions/${selected.id}/diff${query}`)
+      .then(res => setDiff(res.data.data))
+      .catch(() => setDiff(null));
+  }, [snippet.id, snippet.code, selected, against]);
   const canRestore = canRestoreRole(user?.role);
 
   useEffect(() => {
@@ -44,7 +61,7 @@ export const SnippetHistory = (props: Props): JSX.Element => {
 
     if (
       !window.confirm(
-        'Restore this version? The current snippet will be saved in history first.'
+        'Roll back to this version? The current snippet will be saved in history first, so this can be undone.'
       )
     ) {
       return;
@@ -109,8 +126,34 @@ export const SnippetHistory = (props: Props): JSX.Element => {
                 <>
                   <div className='version-diff-meta'>
                     <span>
-                      Current vs {dateParser(selected.createdAt).relative}
+                      {dateParser(selected.createdAt).relative} → {modifiedLabel}
+                      {diff && (
+                        <span className='version-diff-stats' data-testid='diff-stats'>
+                          {' '}
+                          <span className='text-success'>+{diff.added}</span>{' '}
+                          <span className='text-danger'>−{diff.removed}</span>
+                          {diff.changed.title && ' · title changed'}
+                          {diff.changed.docs && ' · docs changed'}
+                        </span>
+                      )}
                     </span>
+                    <select
+                      aria-label='Compare against'
+                      className='form-select form-select-sm version-compare'
+                      value={String(against)}
+                      onChange={e =>
+                        setAgainst(e.target.value === 'current' ? 'current' : Number(e.target.value))
+                      }
+                    >
+                      <option value='current'>vs current</option>
+                      {versions
+                        .filter(version => version.id !== selected.id)
+                        .map(version => (
+                          <option key={version.id} value={version.id}>
+                            vs {dateParser(version.createdAt).relative} ({version.title})
+                          </option>
+                        ))}
+                    </select>
                     <div className='admin-actions'>
                       <button
                         type='button'
@@ -126,7 +169,7 @@ export const SnippetHistory = (props: Props): JSX.Element => {
                           disabled={restoring}
                           onClick={restoreVersion}
                         >
-                          {restoring ? 'Restoring…' : 'Restore'}
+                          {restoring ? 'Rolling back…' : 'Roll back to this'}
                         </button>
                       )}
                     </div>
@@ -136,7 +179,7 @@ export const SnippetHistory = (props: Props): JSX.Element => {
                     theme='vs-dark'
                     language={selected.language || snippet.language}
                     original={selected.code}
-                    modified={snippet.code}
+                    modified={modifiedCode}
                     options={{
                       readOnly: true,
                       renderSideBySide: true,
