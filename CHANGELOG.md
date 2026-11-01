@@ -4,6 +4,17 @@ All notable changes to SnippyCode are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Share links can expire: set "Link expires" (1 hour to 30 days, or never) on a public snippet. Expired shares return 404 on `/s/` and tokenless `/raw`; snippet raw tokens keep working. `PATCH /api/snippets/:id` accepts `shareExpiresAt` (ISO date or `null`).
+- One-shot share links (`shareOneShot`): the first anonymous view of `/s/` or tokenless `/raw` burns the link and makes the snippet private again (audited as `snippet.share_consumed`). Concurrent viewers get it exactly once.
+- Version diff API: `GET /api/snippets/:id/versions/:versionId/diff[?against=<versionId>]` returns line diff, `+/-` counts and which metadata changed.
+- Version history compares a version with the current snippet or with another version, shows `+/-` counts, and rolls back through the existing restore endpoint.
+
+### Changed
+- Making a snippet private clears its share expiry and one-shot flag. `POST`/`PUT` ignore these fields; only `PATCH` sets them.
+
 ## [1.3.0] - 2026-10-12
 
 ### Added
