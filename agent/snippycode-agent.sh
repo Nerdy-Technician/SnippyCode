@@ -519,6 +519,9 @@ class Bridge:
         headers = {
             "Authorization": "Bearer " + self.token,
             "Content-Type": "application/json",
+            # Cloudflare Browser Integrity Check rejects the default
+            # Python-urllib User-Agent with error 1010.
+            "User-Agent": "SnippyCode-Agent/1.5.0 (pty)",
         }
         if self.fingerprint:
             headers["X-Agent-Fingerprint"] = self.fingerprint
